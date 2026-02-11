@@ -1,9 +1,23 @@
 {
-  "name": "cryptocall-fm",
+  "name": "seemplify.tv",
   "version": "1.0.0",
-  "description": "24/7 AI crypto radio host on Solana + X Spaces",
+  "description": "Seemplify.TV - Decentralized AI entertainment network. Flagship pilot: Crypto Call FM (CC.FM)",
   "type": "module",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:Bino-Elgua/Agent.TV.git"
+  },
+  "keywords": [
+    "agentic-ai",
+    "decentralized",
+    "entertainment",
+    "solana",
+    "akash",
+    "theta",
+    "crypto",
+    "streaming"
+  ],
   "scripts": {
     "dev": "node src/index.js",
     "test": "node src/tests/dry-run.js",

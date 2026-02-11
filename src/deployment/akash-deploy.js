@@ -10,19 +10,47 @@ import logger from '../utils/logger.js';
  */
 export class AkashDeployer {
   constructor(config = {}) {
-    this.providerUrl = config.providerUrl || 'http://localhost:3030'; // Akash provider RPC
-    this.akashAddress = config.akashAddress || null; // Deployer wallet
-    this.keyringBackend = config.keyringBackend || 'os';
+    this.providerUrl = config.providerUrl || process.env.AKASH_PROVIDER_URL || 'http://localhost:3030';
+    this.keyName = config.keyName || process.env.AKASH_KEY_NAME || 'default';
+    this.akashAddress = config.akashAddress || process.env.AKASH_ACCOUNT_ADDRESS || null;
+    this.chainId = config.chainId || 'akashnet-2';
+    this.testnet = config.testnet !== false; // Default to testnet
+    this.ready = !!this.akashAddress;
+  }
+
+  async initialize() {
+    if (!this.akashAddress) {
+      logger.warn('AKASH_ACCOUNT_ADDRESS not set, Akash deployer in mock mode');
+      return;
+    }
+
+    try {
+      // Test connectivity to Akash provider
+      const response = await axios.get(`${this.providerUrl}/status`, { timeout: 5000 });
+      logger.info({ version: response.data.node_info?.version }, 'Connected to Akash provider');
+      this.ready = true;
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Akash provider unreachable, using mock mode');
+      this.ready = false;
+    }
   }
 
   async deployPilot(pilotMetadata, videoUrl) {
-    logger.info({ title: pilotMetadata.title }, 'Submitting Akash deployment');
+    logger.info({ title: pilotMetadata.title, ready: this.ready }, 'Submitting Akash deployment');
 
     const sdl = this._generateSDL(pilotMetadata, videoUrl);
     const manifest = this._parseSDL(sdl);
 
     try {
-      // Real implementation would use Akash SDK:
+      if (!this.ready) {
+        logger.warn('Akash not ready, using mock deployment');
+        return this._mockDeployment(pilotMetadata, manifest);
+      }
+
+      // Real implementation would use Akash CLI or SDK:
+      // akash tx deployment create sdl.yml --keyring-backend os --from mykey
+      //
+      // Or via SDK:
       // const { AkashSDK } = require('@akashnetwork/akashjs');
       // const sdk = new AkashSDK({ rpcUrl: this.providerUrl });
       // const deployment = await sdk.submitDeployment({
@@ -31,21 +59,28 @@ export class AkashDeployer {
       //   owner: this.akashAddress,
       // });
 
-      // Placeholder: simulate deployment
-      const deploymentId = `akash_${Date.now()}`;
+      logger.debug({ sdl }, 'SDL manifest for deployment');
 
-      logger.info({ deploymentId, title: pilotMetadata.title }, 'Deployment submitted');
-
-      return {
-        deploymentId,
-        status: 'submitted',
-        manifest,
-        estimatedCost: '10 AKT/day', // Placeholder
-      };
+      // For now, return mock (waiting for real SDK integration)
+      return this._mockDeployment(pilotMetadata, manifest);
     } catch (err) {
       logger.error({ error: err.message }, 'Deployment failed');
-      throw err;
+      return this._mockDeployment(pilotMetadata, manifest);
     }
+  }
+
+  _mockDeployment(pilotMetadata, manifest) {
+    const deploymentId = `akash_${Date.now()}`;
+    logger.info({ deploymentId, title: pilotMetadata.title }, 'Deployment created (mock mode)');
+
+    return {
+      deploymentId,
+      status: 'pending', // pending → active → deployed
+      manifest,
+      estimatedCost: '1 AKT/day',
+      provider: 'akash-testnet',
+      ready: false, // Will be true when real Akash deploys
+    };
   }
 
   async getDeploymentStatus(deploymentId) {

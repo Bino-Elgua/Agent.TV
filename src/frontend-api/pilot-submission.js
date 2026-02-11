@@ -1,18 +1,47 @@
 import logger from '../utils/logger.js';
 import { orchestrator } from '../agents/orchestrator.js';
 import { votingSystem } from '../governance/voting.js';
+import { database } from '../db/index.js';
 
 /**
  * PilotSubmissionHandler – Manages user pilot submissions
  * - Validate submission (check $TICKER balance for spam prevention)
  * - Queue for agent processing
  * - Create governance proposal after video generation
+ * - Persist all submissions to PostgreSQL
  */
 export class PilotSubmissionHandler {
   constructor(config = {}) {
     this.minTokenBalance = config.minTokenBalance || 100; // Min tokens to submit
-    this.submissions = new Map(); // submissionId -> submission
+    this.submissions = new Map(); // submissionId -> submission (local cache)
+    this.db = config.database || database;
     this.tokenChecker = config.tokenChecker; // Function to verify token balance
+  }
+
+  async initialize() {
+    try {
+      await this.db.initialize();
+      logger.info('Database connected for submission handler');
+      // Load existing submissions from database
+      await this._loadSubmissionsFromDB();
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Database not available, using in-memory');
+    }
+  }
+
+  async _loadSubmissionsFromDB() {
+    try {
+      if (!this.db.ready) {
+        logger.debug('Database not ready, skipping submissions load');
+        return;
+      }
+
+      // In a real implementation, we'd load all submissions
+      // For now, just log that database is ready
+      logger.info('Submission handler database ready');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to load submissions from database');
+    }
   }
 
   async validateAndSubmit(submissionData, userAddress) {
@@ -41,12 +70,26 @@ export class PilotSubmissionHandler {
       proposalId: null,
     };
 
-    this.submissions.set(submissionId, submission);
+    // Persist to database
+    try {
+      const dbSubmission = await this.db.createSubmission({
+        title: submission.title,
+        description: submission.description,
+        creator: submission.creator,
+        workflowId: submission.workflowId,
+      });
+      submission.id = dbSubmission.id || submissionId;
+      logger.debug({ submissionId: submission.id }, 'Submission persisted to database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to persist submission to database');
+    }
+
+    this.submissions.set(submission.id, submission);
 
     // Step 4: Queue for agent processing
     await this._queueForProcessing(submission);
 
-    logger.info({ submissionId, title: submissionData.title }, 'Submission queued');
+    logger.info({ submissionId: submission.id, title: submissionData.title }, 'Submission queued');
 
     return submission;
   }
@@ -105,14 +148,26 @@ export class PilotSubmissionHandler {
     }
   }
 
-  _onWorkflowComplete(submission, workflow) {
+  async _onWorkflowComplete(submission, workflow) {
     logger.info({ submissionId: submission.id }, 'Workflow complete, creating proposal');
 
     submission.status = 'generated';
     submission.workflowId = workflow.id;
 
+    // Update in database
+    try {
+      await this.db.updateSubmissionStatus(submission.id, 'generated', {
+        researchData: workflow.stages.researcher,
+        scriptData: workflow.stages.scriptor,
+        videoUrl: workflow.stages.videoGen.videoUrl,
+        streamingUrl: workflow.stages.streamer.clipUrl,
+      });
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to update submission status in database');
+    }
+
     // Create governance proposal
-    const proposal = votingSystem.createProposal(
+    const proposal = await votingSystem.createProposal(
       submission,
       workflow.stages.streamer.clipUrl,
       workflow.stages.streamer.deploymentId
@@ -120,6 +175,15 @@ export class PilotSubmissionHandler {
 
     submission.proposalId = proposal.id;
     submission.status = 'voting';
+
+    // Update proposal reference in database
+    try {
+      await this.db.updateSubmissionStatus(submission.id, 'voting', {
+        proposalId: proposal.id,
+      });
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to link proposal to submission');
+    }
 
     logger.info(
       { submissionId: submission.id, proposalId: proposal.id },

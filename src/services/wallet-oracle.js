@@ -139,7 +139,7 @@ export class WalletOracle {
       // Cache result
       this.cache.set(walletAddress, { data: response, timestamp: Date.now() });
 
-      logger.info({ wallet: walletAddress, tier, script: roast.script.slice(0, 50) }, 'Oracle ready');
+      logger.info({ wallet: walletAddress, tier, script: response.script.slice(0, 50) }, 'Oracle ready');
       return response;
     } catch (err) {
       logger.error({ wallet: walletAddress, error: err.message }, 'Oracle error, falling back to Tier 1');
@@ -372,11 +372,22 @@ Generate the intro only, no explanation.`;
       // Call Grok (or fallback to template-based)
       let intro = await this._callGrokAPI(prompt);
 
+      // If Grok failed, return fallback
+      if (!intro) {
+        logger.debug({ wallet: walletAddress }, 'Grok unavailable, using fallback');
+        return this._getFallbackIntro(tier, metrics);
+      }
+
       // Check for loops
-      while (this.wasIntroRecentlyUsed(walletAddress, intro)) {
-        logger.debug({ wallet: walletAddress }, 'Intro was recent, regenerating');
+      let attempts = 0;
+      while (this.wasIntroRecentlyUsed(walletAddress, intro) && attempts < 3) {
+        logger.debug({ wallet: walletAddress, attempt: attempts + 1 }, 'Intro was recent, regenerating');
         const regeneratePrompt = prompt + '\n\nGenerate a DIFFERENT intro with the same tone.';
         intro = await this._callGrokAPI(regeneratePrompt);
+        if (!intro) {
+          return this._getFallbackIntro(tier, metrics);
+        }
+        attempts++;
       }
 
       // Cache it
@@ -431,10 +442,11 @@ Generate the intro only, no explanation.`;
 
   /**
    * Call Grok API for intro generation
+   * Falls back to template if API unavailable
    */
   async _callGrokAPI(prompt) {
     if (!this.grokKey) {
-      logger.warn('GROK_API_KEY not set, using template');
+      logger.warn('GROK_API_KEY not set, using fallback template');
       return null;
     }
 
@@ -456,9 +468,16 @@ Generate the intro only, no explanation.`;
         }
       );
 
-      return response.data.choices[0].message.content.trim();
+      const text = response.data.choices?.[0]?.message?.content?.trim();
+      if (!text) {
+        logger.warn('Grok returned empty response');
+        return null;
+      }
+      
+      logger.debug({ length: text.length }, 'Grok intro generated');
+      return text;
     } catch (err) {
-      logger.warn({ error: err.message }, 'Grok API call failed');
+      logger.warn({ error: err.message, status: err.response?.status }, 'Grok API call failed, using fallback');
       return null;
     }
   }

@@ -38,17 +38,25 @@ export class AvatarProvider {
     // HeyGen API: https://docs.heygen.com/reference/generate-video
     logger.debug('Calling HeyGen API');
 
+    if (!this.apiKey) {
+      logger.warn('No HeyGen API key configured, using placeholder video URL');
+      return {
+        videoUrl: `https://placeholder.video/heygen_${Date.now()}.mp4`,
+        videoId: `placeholder_${Date.now()}`,
+      };
+    }
+
     const payload = {
       video_inputs: [
         {
           character: {
             type: 'avatar',
-            avatar_id: options.avatarId || this.avatarId,
+            avatar_id: options.avatarId || this.avatarId || 'Anna_public_0',
           },
           voice: {
             type: 'text',
             input_text: script,
-            voice_id: options.voiceId || this.voiceId,
+            voice_id: options.voiceId || this.voiceId || '1bd3ecda-7f3d-4f4f-9498-2e8b8f64e6dc',
           },
           background: {
             type: 'color',
@@ -56,35 +64,56 @@ export class AvatarProvider {
           },
         },
       ],
-      quality: options.quality || this.videoQuality,
+      quality: options.quality || this.videoQuality || 'medium',
       dimension: {
-        width: 1080,
-        height: 1920,
+        width: 1920,
+        height: 1080,
       },
     };
 
     try {
+      logger.debug({ payload }, 'Sending request to HeyGen API');
+
       const response = await axios.post(
-        'https://api.heygen.com/v1/video.generate',
+        'https://api.heygen.com/v1/video_requests.submit',
         payload,
         {
           headers: {
-            'X-API-Key': this.apiKey,
+            'X-APIKEY': this.apiKey,
             'Content-Type': 'application/json',
           },
-          timeout: 60000,
+          timeout: 30000,
         }
       );
 
-      const videoId = response.data.data.video_id;
+      if (!response.data || !response.data.data || !response.data.data.video_id) {
+        logger.warn('Unexpected HeyGen response format, using placeholder');
+        return {
+          videoUrl: `https://placeholder.video/heygen_${Date.now()}.mp4`,
+          videoId: `placeholder_${Date.now()}`,
+        };
+      }
 
-      // Poll for completion
-      return await this._pollVideoStatus('heygen', videoId);
+      const videoId = response.data.data.video_id;
+      logger.info({ videoId }, 'HeyGen video request submitted');
+
+      // Poll for completion (with shorter timeout for demo)
+      return await this._pollVideoStatus('heygen', videoId, 30);
     } catch (err) {
       if (err.response?.status === 401) {
-        logger.warn('HeyGen API key invalid – using placeholder video URL');
-        return { videoUrl: 'https://placeholder.video/ai-generated.mp4', videoId: 'placeholder' };
+        logger.warn('HeyGen API key invalid (401) – using placeholder video URL');
+        return {
+          videoUrl: `https://placeholder.video/heygen_${Date.now()}.mp4`,
+          videoId: `placeholder_${Date.now()}`,
+        };
+      } else if (err.code === 'ECONNABORTED') {
+        logger.warn('HeyGen API timeout – using placeholder video URL');
+        return {
+          videoUrl: `https://placeholder.video/heygen_${Date.now()}.mp4`,
+          videoId: `placeholder_${Date.now()}`,
+        };
       }
+      logger.error({ error: err.message }, 'HeyGen API error');
       throw err;
     }
   }

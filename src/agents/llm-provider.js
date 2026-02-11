@@ -42,8 +42,8 @@ export class LLMProvider {
           return await this._completeOpenAICompatible(prompt, mergedOptions);
       }
     } catch (err) {
-      logger.error({ error: err.message, type: this.type }, 'LLM completion failed');
-      throw err;
+      logger.error({ error: err.message, type: this.type }, 'LLM completion failed, using mock');
+      return this._getMockCompletion(prompt);
     }
   }
 

@@ -1,27 +1,53 @@
 import EventEmitter from 'eventemitter3';
 import logger from '../utils/logger.js';
+import { database } from '../db/index.js';
 
 /**
  * ChannelManager – Manages deployed channels
  * - Track persistent agentic channels (winners from voting)
  * - Monitor channel status/metrics
  * - Store channel metadata (creator, tags, governance history)
+ * - Persist all data to PostgreSQL
  */
 export class ChannelManager extends EventEmitter {
   constructor(config = {}) {
     super();
-    this.channels = new Map(); // channelId -> channel
+    this.channels = new Map(); // channelId -> channel (local cache)
+    this.db = config.database || database;
     this.featuredChannels = []; // Featured/top channels
   }
 
   async initialize() {
     logger.info('ChannelManager initializing');
 
-    // Real: Load channels from persistent storage (database)
-    // const channels = await db.channels.findAll();
-    // channels.forEach(ch => this.channels.set(ch.id, ch));
+    // Initialize database
+    try {
+      await this.db.initialize();
+      logger.info('Database connected for channel manager');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Database not available, using in-memory');
+    }
+
+    // Load channels from persistent storage (database)
+    await this._loadChannelsFromDB();
 
     this.emit('channels-ready');
+  }
+
+  async _loadChannelsFromDB() {
+    try {
+      if (!this.db.ready) {
+        logger.debug('Database not ready, skipping channels load');
+        return;
+      }
+
+      const channels = await this.db.getAllChannels();
+      channels.forEach(ch => this.channels.set(ch.id, ch));
+
+      logger.info({ count: channels.length }, 'Loaded channels from database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to load channels from database');
+    }
   }
 
   async registerChannel(deploymentInfo) {
@@ -50,12 +76,22 @@ export class ChannelManager extends EventEmitter {
       },
     };
 
-    this.channels.set(channelId, channel);
+    // Persist to database
+    try {
+      const dbChannel = await this.db.createChannel({
+        title: channel.title,
+        description: channel.description,
+        creator: channel.creator,
+      });
+      channel.id = dbChannel.id || channelId;
+      logger.debug({ channelId: channel.id }, 'Channel persisted to database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to persist channel to database');
+    }
 
-    // Real: Persist to database
-    // await db.channels.insert(channel);
+    this.channels.set(channel.id, channel);
 
-    logger.info({ channelId, title: channel.title }, 'Channel registered');
+    logger.info({ channelId: channel.id, title: channel.title }, 'Channel registered');
 
     return channel;
   }
@@ -104,8 +140,18 @@ export class ChannelManager extends EventEmitter {
     channel.viewers = metrics.currentViewers || channel.viewers;
     channel.totalViews = (channel.totalViews || 0) + (metrics.newViews || 0);
 
-    // Real: Update database
-    // await db.channels.update(channelId, { metrics, viewers: channel.viewers });
+    // Update database
+    try {
+      await this.db.updateChannelStats(channelId, {
+        totalEpisodes: metrics.totalEpisodes || 0,
+        totalVotes: metrics.totalVotes || 0,
+        totalViewers: channel.totalViews,
+        creatorTreasury: metrics.creatorTreasury || 0,
+        governancePool: metrics.governancePool || 0,
+      });
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to update channel metrics in database');
+    }
 
     logger.debug({ channelId, metrics }, 'Metrics updated');
 

@@ -11,6 +11,7 @@ export class VoicePipeline {
     this.currentTrends = [];
     this.messageBuffer = [];
     this.oracle = walletOracle;
+    this.activeCalls = new Map(); // Track active calls for dynamic exits
   }
 
   async init() {
@@ -36,9 +37,14 @@ export class VoicePipeline {
     });
 
     queueManager.on('call-active', call => {
-      logger.info({ call }, 'Queue event: call active, prioritize caller voice');
+      logger.info({ call }, 'Queue event: call active, pulling dynamic oracle intro');
       // **NEW: Apply oracle analysis to active call**
       this.handleActiveCallWithOracle(call);
+    });
+
+    queueManager.on('call-ended', callId => {
+      logger.info({ callId }, 'Queue event: call ended, generating dynamic exit');
+      this.handleCallEnded(callId);
     });
   }
 
@@ -104,19 +110,47 @@ export class VoicePipeline {
   }
 
   /**
-   * Register call for dynamic exit on hangup
+    * Register call for dynamic exit on hangup
+    */
+   registerCallForExit(callId, walletAddress, tier) {
+     this.activeCalls.set(callId, {
+       walletAddress,
+       tier,
+       startTime: Date.now(),
+       callTone: 'neutral', // Will be updated by host input
+     });
+     logger.debug({ callId, wallet: walletAddress }, 'Call registered for dynamic exit');
+   }
+
+  /**
+   * Handle call end event – generate dynamic exit
    */
-  registerCallForExit(callId, walletAddress, tier) {
-    if (!this.activeCalls) {
-      this.activeCalls = new Map();
+  async handleCallEnded(callId, callTone = 'neutral') {
+    if (!this.activeCalls.has(callId)) {
+      logger.debug({ callId }, 'Call not registered, skipping exit generation');
+      return;
     }
-    this.activeCalls.set(callId, {
-      walletAddress,
-      tier,
-      startTime: Date.now(),
-      callTone: 'neutral', // Will be updated by host input
-    });
-    logger.debug({ callId, wallet: walletAddress }, 'Call registered for dynamic exit');
+
+    const callData = this.activeCalls.get(callId);
+    const duration = Date.now() - callData.startTime;
+    
+    logger.info({ callId, duration, tier: callData.tier }, 'Call ended, generating dynamic exit');
+
+    try {
+      const exit = await this.generateDynamicExit(callId, callTone);
+      
+      // Queue exit segment
+      if (exit) {
+        this.queueSegment({
+          type: 'oracle-exit',
+          text: exit,
+          duration: 5000, // 5 sec for exit
+          callId,
+        });
+      }
+    } catch (err) {
+      logger.error({ error: err.message, callId }, 'Error generating exit');
+    }
   }
 
   /**

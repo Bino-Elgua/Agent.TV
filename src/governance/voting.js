@@ -1,10 +1,11 @@
 import EventEmitter from 'eventemitter3';
 import logger from '../utils/logger.js';
 import { solanaIntegration } from './solana-integration.js';
+import { database } from '../db/index.js';
 
 /**
  * VotingSystem – On-chain governance for pilot greenlight
- * - Create proposals (Solana program)
+ * - Create proposals (Solana program + PostgreSQL)
  * - Track $TICKER weighted votes
  * - Emit events when vote passes → trigger deployment
  * - Manage treasury funding for Akash/Theta
@@ -13,11 +14,12 @@ export class VotingSystem extends EventEmitter {
   constructor(config = {}) {
     super();
     this.solana = config.solana || solanaIntegration;
+    this.db = config.database || database;
     this.treasuryAddress = config.treasuryAddress || null;
     this.votingPeriod = config.votingPeriod || 7 * 24 * 60 * 60; // 7 days in seconds
     this.quorumPercent = config.quorumPercent || 10; // 10% quorum
     this.passingPercent = config.passingPercent || 50; // 50% to pass
-    this.proposals = new Map();
+    this.proposals = new Map(); // Local cache for fast reads
   }
 
   async initialize() {
@@ -26,8 +28,58 @@ export class VotingSystem extends EventEmitter {
     // Initialize Solana integration
     await this.solana.initialize();
 
+    // Initialize database
+    try {
+      await this.db.initialize();
+      logger.info('Database connected for voting system');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Database not available, using in-memory');
+    }
+
+    // Load existing proposals from database
+    await this._loadProposalsFromDB();
+
     logger.info('✓ Voting system ready');
     this.emit('voting-ready');
+  }
+
+  async _loadProposalsFromDB() {
+    try {
+      if (!this.db.ready) {
+        logger.debug('Database not ready, skipping proposal load');
+        return;
+      }
+
+      const proposals = await this.db.getAllProposals();
+      proposals.forEach(p => {
+        this.proposals.set(p.id, this._dbRowToProposal(p));
+      });
+
+      logger.info({ count: proposals.length }, 'Loaded proposals from database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to load proposals from database');
+    }
+  }
+
+  _dbRowToProposal(row) {
+    return {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      creator: row.creator,
+      status: row.status,
+      startTime: new Date(row.created_at).getTime(),
+      endTime: new Date(row.expires_at).getTime(),
+      votes: {
+        yes: row.yes_votes,
+        no: row.no_votes,
+        abstain: row.abstain_votes,
+      },
+      voters: new Set(), // Will populate from database
+      quorum: row.total_weight,
+      passed: row.passed,
+      onChain: row.on_chain,
+    };
   }
 
   async createProposal(pilotMetadata, thetaUrl, deploymentId) {
@@ -58,14 +110,27 @@ export class VotingSystem extends EventEmitter {
       onChain: false,
     };
 
-    this.proposals.set(proposalId, proposal);
+    // Persist to database first
+    try {
+      const dbProposal = await this.db.createProposal({
+        title: proposal.title,
+        description: proposal.description,
+        creator: proposal.creator,
+      });
+      proposal.id = dbProposal.id || proposalId;
+      logger.debug({ proposalId: proposal.id }, 'Proposal persisted to database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to persist proposal to database');
+    }
+
+    this.proposals.set(proposal.id, proposal);
 
     // Submit to Solana on-chain
     try {
       const onChainResult = await this.solana.createProposal(proposal);
       proposal.onChain = !onChainResult.mockProposal;
       proposal.onChainId = onChainResult.proposalId;
-      logger.info({ proposalId, onChain: proposal.onChain }, 'Proposal created');
+      logger.info({ proposalId: proposal.id, onChain: proposal.onChain }, 'Proposal created');
     } catch (err) {
       logger.warn({ error: err.message }, 'On-chain proposal creation failed, using local only');
     }
@@ -96,6 +161,14 @@ export class VotingSystem extends EventEmitter {
     proposal.votes[voteChoice] = (proposal.votes[voteChoice] || 0) + voteWeight;
     proposal.voters.add(voter);
 
+    // Persist vote to database
+    try {
+      await this.db.recordVote(proposalId, voter, voteChoice, voteWeight);
+      logger.debug({ proposalId, voter, choice: voteChoice }, 'Vote persisted to database');
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to persist vote to database');
+    }
+
     // Real: Record vote on-chain via program instruction
     // const tx = await this._submitVoteOnChain(proposalId, voter, voteChoice, voteWeight);
 
@@ -105,6 +178,18 @@ export class VotingSystem extends EventEmitter {
     );
 
     this.emit('vote-cast', { proposalId, voter, choice: voteChoice, weight: voteWeight });
+
+    // Update proposal vote counts in database
+    try {
+      await this.db.updateProposalVotes(
+        proposalId,
+        proposal.votes.yes,
+        proposal.votes.no,
+        proposal.votes.abstain
+      );
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to update proposal votes in database');
+    }
 
     // Check if vote passed
     this._checkProposalStatus(proposalId);

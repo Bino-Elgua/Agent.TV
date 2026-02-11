@@ -28,7 +28,8 @@
     "test:deploy": "node src/tests/deployment-dry-run.js",
     "test:full": "node src/tests/full-integration.js",
     "test:oracle": "node src/tests/wallet-oracle-test.js",
-    "test:intro": "node src/tests/dynamic-intro-test.js"
+    "test:intro": "node src/tests/dynamic-intro-test.js",
+    "test:dynamic-oracle": "node src/tests/dynamic-oracle-full-flow.js"
   },
   "engines": {
     "node": ">=20.0.0"

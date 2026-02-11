@@ -1,0 +1,21 @@
+[toolchain]
+
+[features]
+seeds = true
+init-if-needed = true
+
+[programs.devnet]
+agent_tv_voting = "AgentTV111111111111111111111111111111111111"
+
+[programs.mainnet]
+agent_tv_voting = "AgentTV111111111111111111111111111111111111"
+
+[registry]
+url = "https://anchor.projectserum.com"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

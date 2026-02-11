@@ -1,0 +1,22 @@
+[package]
+name = "agent-tv-voting"
+version = "0.1.0"
+description = "Solana program for AgentTV decentralized governance"
+edition = "2021"
+
+[dependencies]
+anchor-lang = "0.29"
+anchor-spl = "0.29"
+solana-program = "1.16"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "agent_tv_voting"
+
+[profile.release]
+overflow-checks = true
+lto = true
+codegen-units = 1
+
+[profile.release.package."anchor-lang"]
+opt-level = 3

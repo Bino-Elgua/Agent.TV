@@ -1,12 +1,14 @@
 import logger from '../utils/logger.js';
 import config from '../config.js';
 import queueManager from '../queue/manager.js';
+import { walletOracle } from '../services/wallet-oracle.js';
 import { withRetry } from '../utils/error-handler.js';
 
 export class HeliusListener {
   constructor() {
     this.isInitialized = false;
     this.webhookSecret = null;
+    this.oracle = walletOracle;
   }
 
   async init() {
@@ -59,19 +61,39 @@ export class HeliusListener {
     const tokensFor2Usd = Math.ceil(2 / tokenPrice);
 
     if (burnAmount >= tokensFor2Usd) {
-      logger.info({ burner: burnerAddress }, 'Burn meets gating requirement, adding to queue');
+      logger.info({ burner: burnerAddress }, 'Burn meets gating requirement, analyzing wallet...');
 
-      // Add burner to priority queue
+      // **NEW: Resurrect wallet persona via oracle**
+      const oracleAnalysis = await this.oracle.run(burnerAddress);
+      logger.info(
+        { burner: burnerAddress, tier: oracleAnalysis.tier, script: oracleAnalysis.script.slice(0, 50) },
+        'Oracle resurrection complete'
+      );
+
+      // Add burner to priority queue with oracle metadata
       queueManager.addCaller(`burn_${txSignature.slice(0, 8)}`, burnerAddress, {
-        priority: 10, // High priority
+        priority: 10 + oracleAnalysis.tier, // Higher tier = higher priority
         metadata: {
           burnAmount,
           tokenPrice,
           txSignature,
+          oracle: {
+            tier: oracleAnalysis.tier,
+            script: oracleAnalysis.script,
+            tone: oracleAnalysis.tone,
+            voice: oracleAnalysis.voice,
+            riskFlags: oracleAnalysis.riskFlags,
+            metrics: oracleAnalysis.metrics,
+          },
         },
       });
 
-      return { queued: true, position: queueManager.queue.length };
+      return {
+        queued: true,
+        position: queueManager.queue.length,
+        tier: oracleAnalysis.tier,
+        script: oracleAnalysis.script,
+      };
     }
 
     logger.warn({ amount: burnAmount, required: tokensFor2Usd }, 'Burn insufficient');

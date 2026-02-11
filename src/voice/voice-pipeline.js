@@ -1,6 +1,7 @@
 import logger from '../utils/logger.js';
 import config from '../config.js';
 import { buildDynamicPrompt } from '../services/host-system.js';
+import { walletOracle } from '../services/wallet-oracle.js';
 import queueManager from '../queue/manager.js';
 
 export class VoicePipeline {
@@ -9,6 +10,7 @@ export class VoicePipeline {
     this.isLocalMode = !config.voice.gpuRemote;
     this.currentTrends = [];
     this.messageBuffer = [];
+    this.oracle = walletOracle;
   }
 
   async init() {
@@ -35,8 +37,56 @@ export class VoicePipeline {
 
     queueManager.on('call-active', call => {
       logger.info({ call }, 'Queue event: call active, prioritize caller voice');
-      this.handleActiveCall(call);
+      // **NEW: Apply oracle analysis to active call**
+      this.handleActiveCallWithOracle(call);
     });
+  }
+
+  /**
+   * NEW: Handle call entry with wallet oracle analysis
+   * If caller has oracle metadata (from burn), use it to customize intro
+   */
+  async handleActiveCallWithOracle(call) {
+    if (call.metadata?.oracle) {
+      const oracle = call.metadata.oracle;
+      logger.info(
+        { tier: oracle.tier, wallet: call.phoneNumber, tone: oracle.tone },
+        'Applying oracle roast to call'
+      );
+
+      // Switch TTS voice based on tier
+      this.switchTTSVoice(oracle.voice);
+
+      // Queue oracle intro script
+      this.queueSegment({
+        type: 'oracle-intro',
+        text: oracle.script,
+        tone: oracle.tone,
+        duration: 5000,
+      });
+
+      // Add risk flags if any
+      if (oracle.riskFlags && oracle.riskFlags.length > 0) {
+        logger.warn({ flags: oracle.riskFlags }, 'Risk flags detected in caller wallet');
+      }
+    } else {
+      this.handleActiveCall(call);
+    }
+  }
+
+  switchTTSVoice(voiceConfig) {
+    if (this.isLocalMode) {
+      logger.debug({ voice: voiceConfig.description }, 'TTS voice would switch (local mode)');
+      return;
+    }
+
+    // Real: Call TTS service to change voice characteristics
+    logger.debug({ pitch: voiceConfig.pitch, speed: voiceConfig.speed }, 'Switching TTS voice');
+  }
+
+  queueSegment(segment) {
+    this.messageBuffer.push(segment);
+    logger.debug({ type: segment.type, text: segment.text.slice(0, 50) }, 'Segment queued');
   }
 
   updateTrends(trends) {

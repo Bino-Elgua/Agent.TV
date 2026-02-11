@@ -1,3 +1,4 @@
+import EventEmitter from 'eventemitter3';
 import logger from '../utils/logger.js';
 
 /**
@@ -6,8 +7,9 @@ import logger from '../utils/logger.js';
  * - Monitor channel status/metrics
  * - Store channel metadata (creator, tags, governance history)
  */
-export class ChannelManager {
+export class ChannelManager extends EventEmitter {
   constructor(config = {}) {
+    super();
     this.channels = new Map(); // channelId -> channel
     this.featuredChannels = []; // Featured/top channels
   }

@@ -54,7 +54,7 @@ export class AgentOrchestrator extends EventEmitter {
   }
 
   async executePilotWorkflow(pilotSubmission) {
-    const workflowId = `wf_${Date.now()}`;
+    const workflowId = `wf_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     logger.info({ workflowId, pilotTitle: pilotSubmission.title }, 'Executing pilot workflow');
 
     const workflow = {
@@ -65,36 +65,70 @@ export class AgentOrchestrator extends EventEmitter {
     };
 
     try {
+      // Create fresh agent instances for this workflow (avoid concurrency issues)
+      const researcherAgent = new ResearcherAgent({
+        llmEndpoint: this.config.llmEndpoint,
+        trendFetcher: this.config.trendFetcher,
+      });
+      await researcherAgent.initialize();
+
+      const scriptorAgent = new ScriptorAgent({
+        llmEndpoint: this.config.llmEndpoint,
+        promptTemplate: this.config.scriptTemplate,
+      });
+      await scriptorAgent.initialize();
+
+      const videoGenAgent = new VideoGenAgent({
+        liveKitEndpoint: this.config.liveKitEndpoint,
+        avatarService: this.config.avatarService,
+      });
+      await videoGenAgent.initialize();
+
+      const streamerAgent = new StreamerAgent({
+        thetaEndpoint: this.config.thetaEndpoint,
+        akashEndpoint: this.config.akashEndpoint,
+      });
+      await streamerAgent.initialize();
+
       // Stage 1: Research
       logger.info({ workflowId }, 'Stage 1: Research');
-      const researchOutput = await this.agents.researcher.execute({
+      const researchOutput = await researcherAgent.execute({
         pilotTitle: pilotSubmission.title,
         pilotDescription: pilotSubmission.description,
         trendScope: pilotSubmission.trendScope || 'crypto',
       });
+      if (!researchOutput) {
+        throw new Error('Research agent failed');
+      }
       workflow.stages.research = researchOutput;
 
       // Stage 2: Script
       logger.info({ workflowId }, 'Stage 2: Script generation');
-      const scriptOutput = await this.agents.scriptor.execute({
-        researchFindings: researchOutput.findings,
+      const scriptOutput = await scriptorAgent.execute({
+        researchFindings: researchOutput,
         episodeLength: pilotSubmission.duration || 300, // 5 min default
         tone: pilotSubmission.tone || 'energetic',
       });
+      if (!scriptOutput) {
+        throw new Error('Script agent failed');
+      }
       workflow.stages.script = scriptOutput;
 
       // Stage 3: Video Generation
       logger.info({ workflowId }, 'Stage 3: Video generation');
-      const videoOutput = await this.agents.videoGen.execute({
+      const videoOutput = await videoGenAgent.execute({
         script: scriptOutput.script,
         avatarStyle: pilotSubmission.avatarStyle || 'default',
         duration: pilotSubmission.duration || 300,
       });
+      if (!videoOutput) {
+        throw new Error('Video generation agent failed');
+      }
       workflow.stages.videoGen = videoOutput;
 
       // Stage 4: Streaming / Publishing
       logger.info({ workflowId }, 'Stage 4: Streaming to Theta/Akash');
-      const streamOutput = await this.agents.streamer.execute({
+      const streamOutput = await streamerAgent.execute({
         videoUrl: videoOutput.videoUrl,
         clipUrl: videoOutput.clipUrl,
         pilotMetadata: {
@@ -103,6 +137,9 @@ export class AgentOrchestrator extends EventEmitter {
           tags: pilotSubmission.tags,
         },
       });
+      if (!streamOutput) {
+        throw new Error('Streamer agent failed');
+      }
       workflow.stages.streamer = streamOutput;
 
       workflow.completedAt = Date.now();

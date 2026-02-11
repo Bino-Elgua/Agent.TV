@@ -43,34 +43,108 @@ export class VoicePipeline {
   }
 
   /**
-   * NEW: Handle call entry with wallet oracle analysis
-   * If caller has oracle metadata (from burn), use it to customize intro
+   * UPGRADED: Handle call entry with dynamic oracle intro
+   * - Generate fresh 15-sec intro via Grok (no canned scripts)
+   * - Switch TTS voice per tier
+   * - Register call for dynamic exit on hangup
    */
   async handleActiveCallWithOracle(call) {
     if (call.metadata?.oracle) {
       const oracle = call.metadata.oracle;
+      const walletAddress = call.phoneNumber; // Caller's wallet
+      const tier = oracle.tier;
+
       logger.info(
-        { tier: oracle.tier, wallet: call.phoneNumber, tone: oracle.tone },
-        'Applying oracle roast to call'
+        { tier, wallet: walletAddress, callId: call.id },
+        'Call entry: generating dynamic oracle intro'
       );
 
       // Switch TTS voice based on tier
       this.switchTTSVoice(oracle.voice);
 
-      // Queue oracle intro script
-      this.queueSegment({
-        type: 'oracle-intro',
-        text: oracle.script,
-        tone: oracle.tone,
-        duration: 5000,
-      });
+      try {
+        // UPGRADED: Generate dynamic intro via Grok
+        const dynamicIntro = await this.oracle.generateDynamicIntro(
+          walletAddress,
+          oracle.metrics,
+          tier,
+          oracle.nftData // Optional NFT holdings
+        );
 
-      // Add risk flags if any
-      if (oracle.riskFlags && oracle.riskFlags.length > 0) {
-        logger.warn({ flags: oracle.riskFlags }, 'Risk flags detected in caller wallet');
+        // Queue oracle intro (15 seconds)
+        this.queueSegment({
+          type: 'oracle-intro',
+          text: dynamicIntro,
+          tone: oracle.tone,
+          duration: 15000, // 15 sec for intro
+          callId: call.id,
+        });
+
+        // Register call for dynamic exit
+        this.registerCallForExit(call.id, walletAddress, tier);
+
+        // Warn on risk flags
+        if (oracle.riskFlags && oracle.riskFlags.length > 0) {
+          logger.warn({ flags: oracle.riskFlags, wallet: walletAddress }, 'Risk flags detected');
+        }
+      } catch (err) {
+        logger.error({ error: err.message, wallet: walletAddress }, 'Failed to generate dynamic intro');
+        // Fall back to static intro
+        this.queueSegment({
+          type: 'oracle-intro',
+          text: oracle.script || 'Welcome to the oracle.',
+          tone: oracle.tone,
+          duration: 5000,
+          callId: call.id,
+        });
       }
     } else {
       this.handleActiveCall(call);
+    }
+  }
+
+  /**
+   * Register call for dynamic exit on hangup
+   */
+  registerCallForExit(callId, walletAddress, tier) {
+    if (!this.activeCalls) {
+      this.activeCalls = new Map();
+    }
+    this.activeCalls.set(callId, {
+      walletAddress,
+      tier,
+      startTime: Date.now(),
+      callTone: 'neutral', // Will be updated by host input
+    });
+    logger.debug({ callId, wallet: walletAddress }, 'Call registered for dynamic exit');
+  }
+
+  /**
+   * Generate dynamic exit on call end (5 seconds, threaten/bless/challenge)
+   */
+  async generateDynamicExit(callId, callTone = 'neutral') {
+    if (!this.activeCalls || !this.activeCalls.has(callId)) {
+      logger.warn({ callId }, 'Call not registered for exit');
+      return null;
+    }
+
+    const callData = this.activeCalls.get(callId);
+    logger.info({ callId, tier: callData.tier }, 'Generating dynamic exit');
+
+    try {
+      const dynamicExit = await this.oracle.generateDynamicExit(
+        callData.walletAddress,
+        callData.tier,
+        callTone
+      );
+
+      // Clean up
+      this.activeCalls.delete(callId);
+
+      return dynamicExit;
+    } catch (err) {
+      logger.error({ error: err.message, callId }, 'Failed to generate dynamic exit');
+      return 'Until the next call.';
     }
   }
 

@@ -1,19 +1,92 @@
 import axios from 'axios';
 import logger from '../utils/logger.js';
+import fs from 'fs';
+import path from 'path';
 
 /**
- * WalletOracle – On-chain wallet analysis engine
- * Analyzes 30-day trading history, assigns Tier 1-5, generates roasts
- * Integrates with Helius RPC, Grok API, QuickNode
+ * WalletOracle – Dynamic on-chain wallet analysis engine
+ * UPGRADED: Live Grok-powered intro generation (no canned scripts)
+ * 
+ * Flow:
+ * 1. Burn detected → fetch 30-day tx + NFTs + whale links
+ * 2. Assign Tier 1-5 based on metrics
+ * 3. Build data dump for Grok (PnL, rugs, NFTs, X sentiment, anomalies)
+ * 4. Call Grok to generate fresh 15-sec intro (tone-matched)
+ * 5. Cache to avoid loops
+ * 6. On call close, generate 5-sec exit (threaten/bless/challenge)
  */
 export class WalletOracle {
   constructor(config = {}) {
     this.heliusKey = config.heliusKey || process.env.HELIUS_API_KEY;
     this.grokKey = config.grokKey || process.env.GROK_API_KEY;
     this.quicknodeKey = config.quicknodeKey || process.env.QUICKNODE_API_KEY;
+    this.arkhamKey = config.arkhamKey || process.env.ARKHAM_API_KEY;
     this.lookbackDays = config.lookbackDays || parseInt(process.env.WALLET_LOOKBACK_DAYS || '30');
     this.roastLevel = config.roastLevel || (process.env.ROAST_LEVEL || 'fire');
     this.cache = new Map(); // wallet -> analysis
+    this.introCache = new Map(); // wallet -> [intros] (last 5)
+    this.cacheFile = config.cacheFile || './last_intros.json';
+    this.loadIntroCache();
+  }
+
+  /**
+   * Load intro cache from file to avoid loops
+   */
+  loadIntroCache() {
+    try {
+      if (fs.existsSync(this.cacheFile)) {
+        const data = fs.readFileSync(this.cacheFile, 'utf-8');
+        const parsed = JSON.parse(data);
+        for (const [wallet, intros] of Object.entries(parsed)) {
+          this.introCache.set(wallet, intros);
+        }
+        logger.debug({ entries: this.introCache.size }, 'Intro cache loaded');
+      }
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to load intro cache');
+    }
+  }
+
+  /**
+   * Save intro cache to file
+   */
+  saveIntroCache() {
+    try {
+      const data = {};
+      for (const [wallet, intros] of this.introCache.entries()) {
+        data[wallet] = intros;
+      }
+      fs.writeFileSync(this.cacheFile, JSON.stringify(data, null, 2));
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to save intro cache');
+    }
+  }
+
+  /**
+   * Add intro to cache (keep last 5)
+   */
+  cacheIntro(walletAddress, intro) {
+    if (!this.introCache.has(walletAddress)) {
+      this.introCache.set(walletAddress, []);
+    }
+    const intros = this.introCache.get(walletAddress);
+    intros.push({ intro, timestamp: Date.now() });
+    if (intros.length > 5) {
+      intros.shift(); // Remove oldest
+    }
+    this.saveIntroCache();
+  }
+
+  /**
+   * Check if intro was recently used
+   */
+  wasIntroRecentlyUsed(walletAddress, intro) {
+    const intros = this.introCache.get(walletAddress) || [];
+    return intros.some(
+      cached => 
+        cached.intro.toLowerCase() === intro.toLowerCase() &&
+        Date.now() - cached.timestamp < 3600000 // 1 hour
+    );
   }
 
   /**
@@ -45,19 +118,19 @@ export class WalletOracle {
       // Assign tier
       const tier = this._assignTier(metrics);
 
-      // Generate script + tone
-      const roast = await this._generateRoast(walletAddress, metrics, tier);
-
       // Determine voice characteristics
       const voice = this._getTierVoice(tier, metrics);
+
+      // Get fallback script (Grok will generate live one)
+      const fallbackScript = this._getFallbackIntro(tier, metrics);
 
       // Compile response
       const response = {
         wallet: walletAddress,
         tier,
         metrics,
-        script: roast.script,
-        tone: roast.tone,
+        script: fallbackScript, // Fallback if Grok unavailable
+        tone: voice.description.toLowerCase(),
         voice,
         riskFlags: this._getRiskFlags(metrics),
         timestamp: new Date().toISOString(),
@@ -254,42 +327,199 @@ export class WalletOracle {
     return 1;
   }
 
-  async _generateRoast(walletAddress, metrics, tier) {
-    const { isHotStreak, isColdStreak, winRatio, rugRatio, memeExposure } = metrics;
+  /**
+   * UPGRADED: Dynamic intro generation via Grok
+   * Builds data dump, calls Grok API, caches result to avoid loops
+   */
+  async generateDynamicIntro(walletAddress, metrics, tier, nftData = null) {
+    logger.info({ wallet: walletAddress, tier }, 'Generating dynamic intro via Grok');
 
-    let script = '';
-    let tone = 'neutral';
+    try {
+      // Build data dump for Grok
+      const dataDump = this._buildDataDump(walletAddress, metrics, tier, nftData);
 
-    if (tier === 5) {
-      script =
-        `You don't trade — you *speak* to the chain. ${winRatio}% wins, ${rugRatio}% rugs. ` +
-        `You're not an investor; you're a *prophecy*. ${isHotStreak ? "Hot streak. Don't flop." : 'Consistent. Intimidating.'}`;
-      tone = 'ritual';
-    } else if (tier === 4) {
-      script =
-        `Whale wallet. They're watching. You hold $${metrics.totalVolume}+ worth. ` +
-        `${isHotStreak ? 'Show us you ain\'t luck.' : 'Cold streak? Even whales bleed.'} ` +
-        `But you're here, and that matters.`;
-      tone = 'awe';
-    } else if (tier === 3) {
-      script =
-        `Clean book. ${winRatio}% wins, low rug exposure. You actually *trade* instead of chase memes. ` +
-        `${isHotStreak ? 'Hot week. Keep it up.' : isColdStreak ? 'Rough week, but the numbers show discipline.' : 'Steady as she goes.'}`;
-      tone = 'respect';
-    } else if (tier === 2) {
-      script =
-        `Another rug chaser. ${memeExposure}% meme exposure, ${rugRatio}% rugs. How many times you gonna learn? ` +
-        `${isHotStreak ? "But hey, today you're up." : 'But you showed up anyway. That is something.'} ` +
-        `Let's see if you survive this one.`;
-      tone = 'roast';
-    } else {
-      script =
-        `${metrics.txCount < 3 ? 'First time?' : 'Mystery wallet. Let\'s'} write your origin story. ` +
-        `Only ${metrics.txCount} moves on the board. Welcome. ${isHotStreak ? 'You\'re up today — nice.' : 'Let\'s build from here.'}`;
-      tone = 'gentle';
+      // Build tier-specific prompt
+      const toneMap = {
+        1: 'curious and welcoming',
+        2: 'brutal roast',
+        3: 'respect and acknowledgment',
+        4: 'awe and pressure',
+        5: 'ritual and reverence',
+      };
+
+      const prompt = `You are a crypto oracle analyzing a wallet for a live radio show.
+      
+Wallet: ${walletAddress}
+Tier: ${tier}
+
+DATA:
+${dataDump}
+
+TASK: Write a fresh 15-second intro (max 120 words). 
+- Tone: ${toneMap[tier]}
+- No canned lines, make it specific to their data
+- Reference real details: their PnL, NFTs, rugs, hot/cold streaks, anomalies
+- If tier 1: curious, "let's write your story"
+- If tier 2: roast, "another rug?" but not mean
+- If tier 3: respect, "clean book"
+- If tier 4: awe, "whale, they're watching"
+- If tier 5: ritual, "you speak to the chain"
+- ROAST_LEVEL: ${this.roastLevel}
+- Today's vibe only (no repeats)
+
+Generate the intro only, no explanation.`;
+
+      // Call Grok (or fallback to template-based)
+      let intro = await this._callGrokAPI(prompt);
+
+      // Check for loops
+      while (this.wasIntroRecentlyUsed(walletAddress, intro)) {
+        logger.debug({ wallet: walletAddress }, 'Intro was recent, regenerating');
+        const regeneratePrompt = prompt + '\n\nGenerate a DIFFERENT intro with the same tone.';
+        intro = await this._callGrokAPI(regeneratePrompt);
+      }
+
+      // Cache it
+      this.cacheIntro(walletAddress, intro);
+
+      return intro;
+    } catch (err) {
+      logger.error({ error: err.message, wallet: walletAddress }, 'Dynamic intro generation failed');
+      return this._getFallbackIntro(tier, metrics);
+    }
+  }
+
+  /**
+   * Build data dump for Grok: PnL, NFTs, rugs, whale status, X sentiment, anomalies
+   */
+  _buildDataDump(walletAddress, metrics, tier, nftData) {
+    const dump = [];
+
+    dump.push(`Trading History (30d):`);
+    dump.push(`  - Transactions: ${metrics.txCount}`);
+    dump.push(`  - Volume: $${metrics.totalVolume}`);
+    dump.push(`  - Win ratio: ${metrics.winRatio}%`);
+    dump.push(`  - PnL: $${metrics.totalPnL}`);
+    dump.push(`  - Max drawdown: $${metrics.maxDrawdown}`);
+
+    if (metrics.isHotStreak) dump.push(`  - 🔥 HOT STREAK (7d PnL: $${metrics.recentPnL})`);
+    if (metrics.isColdStreak) dump.push(`  - 🥶 COLD STREAK (7d PnL: $${metrics.recentPnL})`);
+
+    if (metrics.rugRatio > 0.2) {
+      dump.push(`\nRug Exposure:`);
+      dump.push(`  - Rug ratio: ${metrics.rugRatio}%`);
+      dump.push(`  - Likely targets: meme tokens`);
     }
 
-    return { script, tone };
+    if (nftData) {
+      dump.push(`\nNFT Holdings:`);
+      nftData.forEach(nft => {
+        dump.push(`  - ${nft.name} #${nft.id} (Floor: $${nft.floor})`);
+      });
+    }
+
+    if (metrics.isWhale) {
+      dump.push(`\nWhale Status: Top 10% holder ($${metrics.totalVolume}+)`);
+    }
+
+    dump.push(`\nX Sentiment: ${metrics.xSentiment}`);
+    dump.push(`Days Active: ${metrics.daysActive}`);
+    dump.push(`Meme Exposure: ${metrics.memeExposure}%`);
+
+    return dump.join('\n');
+  }
+
+  /**
+   * Call Grok API for intro generation
+   */
+  async _callGrokAPI(prompt) {
+    if (!this.grokKey) {
+      logger.warn('GROK_API_KEY not set, using template');
+      return null;
+    }
+
+    try {
+      const response = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          model: 'mixtral-8x7b-32768',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 200,
+          temperature: 0.9, // More creative
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.grokKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 10000,
+        }
+      );
+
+      return response.data.choices[0].message.content.trim();
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Grok API call failed');
+      return null;
+    }
+  }
+
+  /**
+   * Generate closing exit (5-sec, threaten/bless/challenge based on tier + call tone)
+   */
+  async generateDynamicExit(walletAddress, tier, callTone = 'neutral') {
+    logger.info({ wallet: walletAddress, tier, callTone }, 'Generating dynamic exit');
+
+    try {
+      const exitPrompt = `You are a crypto oracle saying goodbye to a caller.
+
+Wallet Tier: ${tier}
+Call Tone: ${callTone} (was the call bullish, bearish, questioning, heated?)
+
+Generate a 5-second exit line (max 50 words):
+- If tier 1: "Good luck out there, newbie"
+- If tier 2: "Don't chase the next rug, and don't chase this one"
+- If tier 3: "Keep that clean book, steady hand"
+- If tier 4: "Whales watching, don't miss the next move"
+- If tier 5: "The chain remembers everything. Be wise"
+
+Match the call_tone energy. Threaten, bless, or challenge them based on how the call went.
+
+Exit line only:`;
+
+      const exit = await this._callGrokAPI(exitPrompt);
+      return exit || this._getFallbackExit(tier);
+    } catch (err) {
+      logger.error({ error: err.message }, 'Exit generation failed');
+      return this._getFallbackExit(tier);
+    }
+  }
+
+  /**
+   * Fallback intros (if Grok fails)
+   */
+  _getFallbackIntro(tier, metrics) {
+    const fallbacks = {
+      1: `First time on the board? Welcome. Only ${metrics?.txCount || 'a few'} moves so far. Let's see what you're made of.`,
+      2: `Meme exposure high, rugs even higher. But you're here now, so maybe you learned something. Let's talk.`,
+      3: `Clean book, steady hand. ${metrics?.winRatio || '50'}% wins. You actually trade instead of chase. Respect.`,
+      4: `Whale wallet incoming. Top 10% holder. They're watching. Don't disappoint.`,
+      5: `Oracle energy detected. You don't trade—you speak to the chain. The board goes silent.`,
+    };
+    return fallbacks[tier] || 'Welcome to the oracle.';
+  }
+
+  /**
+   * Fallback exits
+   */
+  _getFallbackExit(tier) {
+    const exits = {
+      1: 'Good luck out there. Learn fast.',
+      2: "Don't chase the next one.",
+      3: 'Keep that discipline. See you next time.',
+      4: 'Whales watching. Act accordingly.',
+      5: 'The chain remembers. Be wise.',
+    };
+    return exits[tier] || 'Until the next call.';
   }
 
   _getTierVoice(tier, metrics) {

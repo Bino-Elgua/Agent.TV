@@ -27,7 +27,8 @@
     "test:pilots": "node src/tests/pilot-flow.js",
     "test:deploy": "node src/tests/deployment-dry-run.js",
     "test:full": "node src/tests/full-integration.js",
-    "test:oracle": "node src/tests/wallet-oracle-test.js"
+    "test:oracle": "node src/tests/wallet-oracle-test.js",
+    "test:intro": "node src/tests/dynamic-intro-test.js"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -66,6 +66,12 @@ const config = {
     burnAddress: process.env.SOLANA_BURN_ADDRESS || '11111111111111111111111111111112',
   },
 
+  // Seemplify configuration
+  seemplify: {
+    tokenSymbol: process.env.SEEMPLIFY_TOKEN_SYMBOL || 'SEEMPLIFY',
+    minPilotStake: parseInt(process.env.SEEMPLIFY_MIN_PILOT_STAKE, 10) || 100,
+  },
+
   // Logging
   logging: {
     level: process.env.LOG_LEVEL || 'info',

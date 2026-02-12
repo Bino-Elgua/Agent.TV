@@ -4,7 +4,7 @@ import { votingSystem } from '../governance/voting.js';
 import { pilotSubmissionHandler } from '../frontend-api/pilot-submission.js';
 import { channelManager } from '../frontend-api/channels.js';
 
-logger.info('🧪 AgentTV Pilot Flow Test');
+logger.info('🧪 Seemplify Pilot Flow Test');
 
 async function runPilotFlowTest() {
   try {

@@ -7,11 +7,11 @@ import { akashDeployer } from '../deployment/akash-deploy.js';
 import { thetaStreamer } from '../deployment/theta-streamer.js';
 
 /**
- * Full AgentTV Integration Test
+ * Full Seemplify Integration Test
  * - Entire workflow from submission to deployment
  */
 async function runFullIntegration() {
-  logger.info('🧪 AgentTV Network Full Integration Test');
+  logger.info('🧪 Seemplify Full Integration Test');
   logger.info('Testing complete workflow: Submit → Process → Vote → Deploy');
 
   try {
@@ -176,7 +176,7 @@ async function runFullIntegration() {
 
     logger.info('\n✅ Full integration test completed successfully!');
     logger.info(
-      '\n✨ AgentTV Network is ready for production:\n' +
+      '\n✨ Seemplify is ready for production:\n' +
         '  📝 Pilot submissions: Fully functional\n' +
         '  🤖 Agent orchestration: 4-stage workflow complete\n' +
         '  🗳️  Governance: Voting system active\n' +

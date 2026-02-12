@@ -1,7 +1,7 @@
 {
-  "name": "seemplify.tv",
+  "name": "seemplify",
   "version": "1.0.0",
-  "description": "Seemplify.TV - Decentralized AI entertainment network. Flagship pilot: Crypto Call FM (CC.FM)",
+  "description": "Seemplify - Decentralized AI entertainment network. Community-driven shows powered by agentic AI.",
   "type": "module",
   "main": "src/index.js",
   "repository": {

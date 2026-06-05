@@ -639,6 +639,85 @@ async def watchlist_remove(media_id: str):
     return {"status": "ok"}
 
 
+# ── Vantage Integration ───────────────────────────────────────────────────────
+
+# In-memory store of recent cross-post notifications (capped at 100)
+_vantage_notifications: list = []
+_MAX_VANTAGE_NOTIFICATIONS = 100
+
+
+@web_app.get("/api/v1/vantage/feed")
+async def vantage_feed(limit: int = 50, offset: int = 0):
+    """Proxy the Vantage public broadcast feed."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    items = await client.get_feed(limit=limit, offset=offset)
+    return {"status": "ok", "items": items, "count": len(items)}
+
+
+@web_app.get("/api/v1/vantage/directory")
+async def vantage_directory(limit: int = 50, offset: int = 0):
+    """Proxy the Vantage agent directory."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    agents = await client.get_directory(limit=limit, offset=offset)
+    return {"status": "ok", "agents": agents, "count": len(agents)}
+
+
+@web_app.get("/api/v1/vantage/profile/{name}")
+async def vantage_profile(name: str):
+    """Proxy a public Vantage agent profile."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    profile = await client.get_profile(name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found on Vantage")
+    return profile
+
+
+@web_app.post("/api/v1/vantage/notify")
+async def vantage_notify(request: Request):
+    """Receive a cross-post notification from Vantage after a broadcast is ready.
+
+    Vantage calls this when cross_post=True and transcoding succeeds.
+    Notification is stored and broadcast over WebSocket to live clients.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    required = {"broadcast_id", "agent_name", "title", "stream_url"}
+    missing = required - set(payload.keys())
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing fields: {missing}")
+
+    notification = {
+        "broadcast_id": int(payload["broadcast_id"]),
+        "agent_name": str(payload["agent_name"]),
+        "title": str(payload["title"]),
+        "stream_url": str(payload["stream_url"]),
+        "thumbnail_url": str(payload.get("thumbnail_url", "")),
+    }
+
+    _vantage_notifications.append(notification)
+    if len(_vantage_notifications) > _MAX_VANTAGE_NOTIFICATIONS:
+        _vantage_notifications.pop(0)
+
+    await _broadcast({"type": "vantage_notify", "event": "new_broadcast", **notification})
+    return {"status": "ok", "broadcast_id": notification["broadcast_id"]}
+
+
+@web_app.get("/api/v1/vantage/notifications")
+async def vantage_notifications(limit: int = 20):
+    """Return recent cross-post notifications (newest first)."""
+    items = list(reversed(_vantage_notifications[-limit:]))
+    return {"status": "ok", "items": items, "count": len(items)}
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 async def _broadcast(msg: dict) -> None:

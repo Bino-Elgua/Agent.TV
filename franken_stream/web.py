@@ -323,20 +323,35 @@ async def v1_extract(request: Request):
 async def v1_poster(title: str, year: Optional[str] = None):
     """
     Return a poster image URL for a movie/show title.
-    Requires TMDB_API_KEY env var. Returns null poster_url if unavailable.
+    Set TMDB_API_READ_TOKEN (Bearer token) or TMDB_API_KEY (v3 key) env var.
     """
     import aiohttp as _aio
-    tmdb_key = os.environ.get("TMDB_API_KEY", "")
-    if not tmdb_key:
+
+    # Prefer the Bearer token (API Read Access Token); fall back to v3 API key
+    bearer = os.environ.get("TMDB_API_READ_TOKEN", "")
+    api_key = os.environ.get("TMDB_API_KEY", "")
+
+    if not bearer and not api_key:
         return {"poster_url": None, "source": "none"}
 
     try:
-        params: dict = {"api_key": tmdb_key, "query": title, "page": 1}
-        if year:
-            params["year"] = year
+        if bearer:
+            headers = {"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+            params: dict = {"query": title, "page": 1}
+            if year:
+                params["year"] = year
+            url = "https://api.themoviedb.org/3/search/multi"
+        else:
+            headers = {}
+            params = {"api_key": api_key, "query": title, "page": 1}
+            if year:
+                params["year"] = year
+            url = "https://api.themoviedb.org/3/search/multi"
+
         async with _aio.ClientSession() as s:
             async with s.get(
-                "https://api.themoviedb.org/3/search/multi",
+                url,
+                headers=headers,
                 params=params,
                 timeout=_aio.ClientTimeout(total=5),
             ) as r:

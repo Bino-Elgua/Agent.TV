@@ -400,7 +400,7 @@ async function playItem(idx) {
   focusIdx = idx;
   currentPageUrl = item.url;
 
-  // Open overlay in loading state
+  // Open overlay
   $('plyTitle').textContent = item.title;
   $('plyLoad').style.display = 'flex';
   $('plyErr').style.display = 'none';
@@ -409,117 +409,147 @@ async function playItem(idx) {
   $('plyVideo').className = 'ply-video';
   $('ply').classList.add('open');
   playerOpen = true;
-  status('Extracting stream for: ' + item.title);
 
-  // Step 1: Try yt-dlp extraction (returns direct stream URL) + regex fallback
-  let playUrl = item.url;
-  let streamType = 'iframe';
+  // ── Step 1: Detect YouTube immediately (no network call needed) ──────────
+  const ytId = getYouTubeId(item.url);
+  if (ytId) {
+    $('plyLoad').style.display = 'none';
+    loadIframe(`https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0`, item.title);
+    status('▶ YouTube: ' + item.title);
+    return;
+  }
 
+  // ── Step 2: Detect direct video file (.mp4 / .m3u8 / .webm) ────────────
+  if (isDirectVideo(item.url)) {
+    loadDirect(item.url, item.title);
+    return;
+  }
+
+  // ── Step 3: Try yt-dlp extraction (with 30s abort) ──────────────────────
+  $('plyLoadTxt').textContent = 'Extracting stream… (up to 30s)';
+  status('Extracting: ' + item.title);
+
+  let extractResult = null;
   try {
-    $('plyLoadTxt').textContent = 'Extracting stream (yt-dlp)…';
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 32000);
     const r = await fetch('/api/v1/extract', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url: item.url})
+      body: JSON.stringify({url: item.url}),
+      signal: ctrl.signal,
     });
-    if (r.ok) {
-      const d = await r.json();
-      if (d.stream_url || d.embed_url) {
-        playUrl = d.stream_url || d.embed_url;
-        streamType = d.type === 'direct' ? 'direct' : 'iframe';
-        $('plyLoadTxt').textContent = streamType === 'direct'
-          ? '▶ Direct stream found — loading…'
-          : 'Loading embed from ' + host(playUrl) + '…';
-      }
-    }
+    clearTimeout(timer);
+    if (r.ok) extractResult = await r.json();
   } catch (_) {}
 
-  // Step 2: Real-Debrid unrestriction
+  if (extractResult) {
+    const su = extractResult.stream_url || extractResult.embed_url;
+    if (su) {
+      // Check if yt-dlp gave us a direct CDN URL or another YouTube URL
+      const ytId2 = getYouTubeId(su);
+      if (ytId2) {
+        $('plyLoad').style.display = 'none';
+        loadIframe(`https://www.youtube.com/embed/${ytId2}?autoplay=1&rel=0`, item.title);
+        status('▶ YouTube: ' + item.title);
+        return;
+      }
+      if (extractResult.type === 'direct' || isDirectVideo(su)) {
+        loadDirect(su, item.title);
+        return;
+      }
+      // Embed iframe (e.g. vidplay, streamwish)
+      $('plyLoad').style.display = 'none';
+      loadIframe(su, item.title);
+      status('▶ ' + item.title);
+      return;
+    }
+  }
+
+  // ── Step 4: Real-Debrid unrestriction on the original URL ────────────────
   if (rdAvailable) {
     try {
+      $('plyLoadTxt').textContent = 'Trying Real-Debrid…';
       const r = await fetch('/api/v1/unrestrict', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({url: playUrl})
+        body: JSON.stringify({url: item.url})
       });
       if (r.ok) {
         const d = await r.json();
-        if (d.url) {
-          playUrl = d.url;
-          streamType = 'direct'; // RD always returns a direct URL
-          $('plyLoadTxt').textContent = '▶ Real-Debrid stream — loading…';
-        }
+        if (d.url) { loadDirect(d.url, item.title); return; }
       }
     } catch (_) {}
   }
 
-  $('plyErrOpen').href = playUrl;
+  // ── Step 5: Fallback — open in browser ──────────────────────────────────
+  showPlayerError(
+    item.url,
+    "Couldn't extract a playable stream in the browser. Open it directly — it will work in the app or a regular browser tab."
+  );
+}
 
-  // Step 3a: Native video player for direct stream URLs (.m3u8, .mp4, or RD)
-  if (streamType === 'direct') {
-    const video = $('plyVideo');
-    video.className = 'ply-video active';
+// ── Player helpers ─────────────────────────────────────────────────────────
 
-    // HLS.js for .m3u8 streams
-    if (playUrl.includes('.m3u8') || playUrl.includes('manifest')) {
-      if (Hls.isSupported()) {
-        if (_hls) { _hls.destroy(); }
-        _hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-        _hls.loadSource(playUrl);
-        _hls.attachMedia(video);
-        _hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          $('plyLoad').style.display = 'none';
-          video.play().catch(() => {});
-        });
-        _hls.on(Hls.Events.ERROR, (_, d) => {
-          if (d.fatal) showPlayerError(playUrl, 'HLS stream error — try opening directly.');
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari native HLS
-        video.src = playUrl;
-        video.addEventListener('loadedmetadata', () => {
-          $('plyLoad').style.display = 'none';
-          video.play().catch(() => {});
-        }, {once: true});
-      }
-    } else {
-      // Plain MP4 / WebM / etc.
-      video.src = playUrl;
-      video.addEventListener('canplay', () => {
-        $('plyLoad').style.display = 'none';
-      }, {once: true});
-      video.addEventListener('error', () => {
-        showPlayerError(playUrl, 'Video failed to load — try opening directly.');
-      }, {once: true});
-      video.play().catch(() => {});
+function loadIframe(url, title) {
+  $('plyLoad').style.display = 'none';
+  $('plyErrOpen').href = url;
+  const fr = $('plyFrame');
+  fr.className = 'ply-frame active';
+  fr.src = url;
+  // If the iframe never fires onload (blocked), show the fallback after 10s
+  let fired = false;
+  fr.onload = () => { fired = true; };
+  setTimeout(() => {
+    if (!fired && playerOpen) {
+      showPlayerError(url, 'Site blocked the embed. Tap "Open in Browser" to watch.');
     }
+  }, 10000);
+  status('▶ ' + title);
+}
 
-    status('▶ Playing: ' + item.title);
+function loadDirect(url, title) {
+  $('plyLoad').style.display = 'none';
+  $('plyErrOpen').href = url;
+  const video = $('plyVideo');
+  video.className = 'ply-video active';
 
-  // Step 3b: Iframe for embed URLs
+  if (_hls) { _hls.destroy(); _hls = null; }
+
+  const isHLS = url.includes('.m3u8') || url.includes('manifest');
+  if (isHLS && typeof Hls !== 'undefined' && Hls.isSupported()) {
+    _hls = new Hls({ enableWorker: true });
+    _hls.loadSource(url);
+    _hls.attachMedia(video);
+    _hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+    _hls.on(Hls.Events.ERROR, (_, d) => {
+      if (d.fatal) showPlayerError(url, 'Stream error — try opening in browser.');
+    });
+  } else if (isHLS && video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = url;
+    video.play().catch(() => {});
   } else {
-    $('plyFrame').className = 'ply-frame active';
-    $('plyFrame').src = playUrl;
-
-    let loaded = false;
-    $('plyFrame').onload = () => {
-      loaded = true;
-      $('plyLoad').style.display = 'none';
-    };
-    setTimeout(() => {
-      if (!loaded) showPlayerError(playUrl,
-        'This site blocks embedding. Open it directly — or the stream may not be available in this region.');
-    }, 14000);
-
-    status('Playing: ' + item.title);
+    video.src = url;
+    video.addEventListener('error', () => {
+      showPlayerError(url, 'Video error — try opening in browser.');
+    }, { once: true });
+    video.play().catch(() => {});
   }
+  status('▶ ' + title);
+}
 
-  // Notify backend (VLC/mpv) — non-blocking
-  fetch('/api/v1/play', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({url: playUrl, title: item.title})
-  }).catch(() => {});
+// ── URL type helpers ───────────────────────────────────────────────────────
+
+function getYouTubeId(url) {
+  // Handles youtube.com/watch?v=ID and youtu.be/ID
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function isDirectVideo(url) {
+  const u = url.toLowerCase().split('?')[0];
+  return u.endsWith('.mp4') || u.endsWith('.m3u8') || u.endsWith('.webm')
+      || u.endsWith('.mkv') || u.endsWith('.ts') || u.endsWith('.avi');
 }
 
 function showPlayerError(url, msg) {

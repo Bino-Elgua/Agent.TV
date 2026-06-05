@@ -101,20 +101,26 @@ def watch(
         results = scraper.search(query, bases, verbose=verbose)
 
         if not results:
-            console.print("[yellow]⚠[/yellow] No results found locally.")
-            console.print(
-                "[cyan]→[/cyan] Trying fallback methods (DuckDuckGo, yt-dlp)..."
-            )
+            console.print("[yellow]⚠[/yellow] No results from providers.")
+            console.print("[cyan]→[/cyan] Trying yt-dlp YouTube search...")
 
-            # Try DuckDuckGo
-            ddg_results = scraper.search_duckduckgo(query)
-            if ddg_results:
-                results.extend(ddg_results)
-                console.print(f"[green]✓[/green] Found {len(ddg_results)} via DDG")
-            
-            # If still nothing, try yt-dlp
+            # 1. yt-dlp YouTube search — most reliable, filters trailers
+            yt_results = scraper.search_ytdlp_quick(query)
+            if yt_results:
+                results.extend(yt_results)
+                console.print(f"[green]✓[/green] Found {len(yt_results)} via yt-dlp")
+
+            # 2. DuckDuckGo — filtered to known streaming sites
             if not results:
-                console.print("[cyan]→[/cyan] Falling back to yt-dlp...")
+                console.print("[cyan]→[/cyan] Trying DuckDuckGo (streaming sites)...")
+                ddg_results = scraper.search_duckduckgo(query)
+                if ddg_results:
+                    results.extend(ddg_results)
+                    console.print(f"[green]✓[/green] Found {len(ddg_results)} via DDG")
+
+            # 3. Direct yt-dlp stream (plays immediately, no selection)
+            if not results:
+                console.print("[cyan]→[/cyan] Streaming directly with yt-dlp...")
                 if scraper.stream_with_yt_dlp(query):
                     return
                 raise typer.Exit(1)

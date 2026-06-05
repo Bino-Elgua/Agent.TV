@@ -7,35 +7,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              orbitron: ['Orbitron', 'sans-serif'],
+              inter: ['Inter', 'sans-serif'],
+            }
+          }
+        }
+      }
+    </script>
     <script type="module" crossorigin src="/assets/index-CYMyP-lN.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-4_iM7h6e.css">
-    <style>
-      /* Force all lucide/decorative SVGs to a reasonable size */
-      #root svg {
-        width: 24px !important;
-        height: 24px !important;
-        min-width: unset !important;
-        min-height: unset !important;
-        max-width: 24px !important;
-        max-height: 24px !important;
-      }
-      /* Allow section hero icons to be a bit bigger but still bounded */
-      #root .section-icon svg,
-      #root .hero-icon svg,
-      #root .empty-state svg {
-        width: 64px !important;
-        height: 64px !important;
-        max-width: 64px !important;
-        max-height: 64px !important;
-      }
-      /* Video.js internal SVGs must be unaffected */
-      .video-js svg, .vjs-tech svg {
-        width: unset !important;
-        height: unset !important;
-        max-width: unset !important;
-        max-height: unset !important;
-      }
-    </style>
   </head>
   <body>
     <div id="root"></div>

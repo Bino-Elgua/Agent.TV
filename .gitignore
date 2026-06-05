@@ -45,3 +45,8 @@ htmlcov/
 target/
 .claude/
 web-ui/node_modules/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*

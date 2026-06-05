@@ -1,9 +1,17 @@
 import asyncio
 import hashlib
 import json
+import os
 from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Set
+
+# Load .env from repo root (or cwd) if present — no-op if file is missing
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass
 
 import typer
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -16,6 +24,7 @@ from franken_stream.cache import FTSCache
 from franken_stream.player import PremiumPlayer
 from franken_stream.preloader import PredictiveLoader
 from franken_stream.providers import ProviderManager
+from franken_stream.real_debrid import get_client as get_rd_client
 from franken_stream.scraper import ContentScraper
 from franken_stream.watchlist import Watchlist
 
@@ -52,12 +61,23 @@ if _ASSETS_DIR.exists():
     web_app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
 
 
+CINEMA_FILE = WEB_UI_DIR / "cinema.html"
+
+
 @web_app.get("/", response_class=HTMLResponse)
 async def root():
     """Serve the main web UI"""
     if not INDEX_FILE.exists():
         raise HTTPException(status_code=404, detail="Web UI not found")
     return FileResponse(INDEX_FILE, media_type="text/html")
+
+
+@web_app.get("/cinema", response_class=HTMLResponse)
+async def cinema():
+    """Serve the TV Cinema Mode UI"""
+    if not CINEMA_FILE.exists():
+        raise HTTPException(status_code=404, detail="Cinema UI not found")
+    return FileResponse(CINEMA_FILE, media_type="text/html")
 
 
 @web_app.get("/api/health")
@@ -117,18 +137,18 @@ async def v1_search(request: Request):
             plugin_results = []
 
         # Merge all results, score by relevance, deduplicate by URL
-        from franken_stream.async_scraper import _relevance_score
+        from franken_stream.async_scraper import _relevance_score, _is_trailer_title
         seen: set = set()
         scored = []
         for title, url in scraper_results:
-            if url not in seen:
+            if url not in seen and not _is_trailer_title(title):
                 seen.add(url)
                 scored.append((_relevance_score(title, query), title, url))
         for item in plugin_results:
             # plugin_results are MediaItem objects
             title = getattr(item, "title", "") if not isinstance(item, tuple) else item[0]
             url = getattr(item, "url", "") if not isinstance(item, tuple) else item[1]
-            if url and url not in seen:
+            if url and url not in seen and not _is_trailer_title(title):
                 seen.add(url)
                 scored.append((_relevance_score(title, query), title, url))
 
@@ -257,6 +277,185 @@ async def v1_embed(media_id: str):
 
 # ── v1 Playback (direct URL) ──────────────────────────────────────────────────
 
+@web_app.get("/api/v1/real-debrid/status")
+async def rd_status():
+    """Return Real-Debrid availability and account info."""
+    rd = get_rd_client()
+    if rd is None:
+        return {"available": False, "reason": "REAL_DEBRID_API_KEY not set"}
+    alive = await rd.is_alive()
+    if not alive:
+        return {"available": False, "reason": "Invalid or expired API key"}
+    return {"available": True}
+
+
+@web_app.post("/api/v1/unrestrict")
+async def rd_unrestrict(request: Request):
+    """Unrestrict a URL via Real-Debrid. Returns {url} on success."""
+    data = await request.json()
+    source_url = data.get("url", "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    rd = get_rd_client()
+    if rd is None:
+        return {"url": None, "reason": "Real-Debrid not configured"}
+
+    premium_url = await rd.unrestrict(source_url)
+    if premium_url:
+        return {"url": premium_url, "original": source_url}
+    return {"url": None, "reason": "URL not supported or unrestriction failed"}
+
+
+async def _ytdlp_extract(url: str, timeout: int = 45) -> Optional[dict]:
+    """
+    Run yt-dlp to extract a direct playable URL from a page.
+    Returns dict with 'stream_url', 'title', 'thumbnail', or None on failure.
+    Supports hundreds of sites — gomovies, fmovies, bflix, tubi, archive.org, etc.
+    """
+    import shutil
+    if not shutil.which("yt-dlp"):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp",
+            "--no-playlist",
+            "--no-check-certificate",
+            "--no-warnings",
+            "--dump-single-json",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+
+        if proc.returncode != 0 or not stdout:
+            return None
+
+        import json as _json
+        data = _json.loads(stdout.decode("utf-8", errors="ignore"))
+
+        # Prefer the requested format URL; fall back to any URL in formats
+        stream_url = data.get("url") or data.get("manifest_url")
+        if not stream_url:
+            # Try to find best format URL
+            for fmt in reversed(data.get("formats", [])):
+                u = fmt.get("url", "")
+                if u.startswith("http"):
+                    stream_url = u
+                    break
+
+        if not stream_url:
+            return None
+
+        return {
+            "stream_url": stream_url,
+            "title": data.get("title", ""),
+            "thumbnail": data.get("thumbnail", ""),
+            "ext": data.get("ext", ""),
+            "duration": data.get("duration"),
+        }
+    except Exception:
+        return None
+
+
+@web_app.post("/api/v1/extract")
+async def v1_extract(request: Request):
+    """
+    Extract a playable URL from a content page.
+    Tries yt-dlp first (supports 1000+ sites), falls back to regex scraping.
+    """
+    data = await request.json()
+    page_url = data.get("url", "").strip()
+    if not page_url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    # 1. yt-dlp — handles JS-heavy sites that regex scraping cannot
+    yt = await _ytdlp_extract(page_url)
+    if yt and yt.get("stream_url"):
+        return {
+            "status": "ok",
+            "embed_url": yt["stream_url"],
+            "stream_url": yt["stream_url"],
+            "type": "direct",
+            "title": yt.get("title"),
+            "thumbnail": yt.get("thumbnail"),
+            "fallback": page_url,
+        }
+
+    # 2. Regex scraping — catches plain iframes/HLS src attributes
+    pm = ProviderManager()
+    scraper = AsyncContentScraper(provider_manager=pm)
+    try:
+        embed_url = await scraper.fetch_embed_from_page(page_url)
+        return {
+            "status": "ok",
+            "embed_url": embed_url,
+            "type": "embed" if embed_url else "none",
+            "fallback": page_url,
+        }
+    except Exception:
+        return {"status": "ok", "embed_url": None, "type": "none", "fallback": page_url}
+    finally:
+        await scraper.close()
+
+
+@web_app.get("/api/v1/poster")
+async def v1_poster(title: str, year: Optional[str] = None):
+    """
+    Return a poster image URL for a movie/show title.
+    Set TMDB_API_READ_TOKEN (Bearer token) or TMDB_API_KEY (v3 key) env var.
+    """
+    import aiohttp as _aio
+
+    # Prefer the Bearer token (API Read Access Token); fall back to v3 API key
+    bearer = os.environ.get("TMDB_API_READ_TOKEN", "")
+    api_key = os.environ.get("TMDB_API_KEY", "")
+
+    if not bearer and not api_key:
+        return {"poster_url": None, "source": "none"}
+
+    try:
+        if bearer:
+            headers = {"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+            params: dict = {"query": title, "page": 1}
+            if year:
+                params["year"] = year
+            url = "https://api.themoviedb.org/3/search/multi"
+        else:
+            headers = {}
+            params = {"api_key": api_key, "query": title, "page": 1}
+            if year:
+                params["year"] = year
+            url = "https://api.themoviedb.org/3/search/multi"
+
+        async with _aio.ClientSession() as s:
+            async with s.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=_aio.ClientTimeout(total=5),
+            ) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    for item in data.get("results", [])[:4]:
+                        poster = item.get("poster_path")
+                        if poster:
+                            return {
+                                "poster_url": f"https://image.tmdb.org/t/p/w342{poster}",
+                                "source": "tmdb",
+                            }
+    except Exception:
+        pass
+
+    return {"poster_url": None, "source": "none"}
+
+
 @web_app.post("/api/v1/play")
 async def v1_play(request: Request):
     data = await request.json()
@@ -264,6 +463,17 @@ async def v1_play(request: Request):
     title = data.get("title", "")
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
+
+    # Attempt Real-Debrid unrestriction if configured
+    rd = get_rd_client()
+    if rd is not None:
+        try:
+            premium = await rd.unrestrict(url)
+            if premium:
+                url = premium
+        except Exception:
+            pass
+
     result = await _player.play(url, title=title)
     if result.get("status") == "playing":
         media_id = hashlib.md5(url.encode()).hexdigest()[:12]
@@ -345,7 +555,17 @@ async def player_spin_up(request: Request):
     finally:
         await scraper2.close()
 
-    # 3. Spin up player
+    # 3. Optionally unrestrict via Real-Debrid
+    rd = get_rd_client()
+    if rd is not None:
+        try:
+            premium = await rd.unrestrict(play_url)
+            if premium:
+                play_url = premium
+        except Exception:
+            pass
+
+    # 4. Spin up player
     result = await _player.play(play_url, title=title)
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message", "Player error"))
@@ -417,6 +637,85 @@ async def watchlist_update(media_id: str, request: Request):
 async def watchlist_remove(media_id: str):
     _watchlist.remove(media_id)
     return {"status": "ok"}
+
+
+# ── Vantage Integration ───────────────────────────────────────────────────────
+
+# In-memory store of recent cross-post notifications (capped at 100)
+_vantage_notifications: list = []
+_MAX_VANTAGE_NOTIFICATIONS = 100
+
+
+@web_app.get("/api/v1/vantage/feed")
+async def vantage_feed(limit: int = 50, offset: int = 0):
+    """Proxy the Vantage public broadcast feed."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    items = await client.get_feed(limit=limit, offset=offset)
+    return {"status": "ok", "items": items, "count": len(items)}
+
+
+@web_app.get("/api/v1/vantage/directory")
+async def vantage_directory(limit: int = 50, offset: int = 0):
+    """Proxy the Vantage agent directory."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    agents = await client.get_directory(limit=limit, offset=offset)
+    return {"status": "ok", "agents": agents, "count": len(agents)}
+
+
+@web_app.get("/api/v1/vantage/profile/{name}")
+async def vantage_profile(name: str):
+    """Proxy a public Vantage agent profile."""
+    from franken_stream.vantage_client import VantageClient
+
+    client = VantageClient()
+    profile = await client.get_profile(name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found on Vantage")
+    return profile
+
+
+@web_app.post("/api/v1/vantage/notify")
+async def vantage_notify(request: Request):
+    """Receive a cross-post notification from Vantage after a broadcast is ready.
+
+    Vantage calls this when cross_post=True and transcoding succeeds.
+    Notification is stored and broadcast over WebSocket to live clients.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    required = {"broadcast_id", "agent_name", "title", "stream_url"}
+    missing = required - set(payload.keys())
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing fields: {missing}")
+
+    notification = {
+        "broadcast_id": int(payload["broadcast_id"]),
+        "agent_name": str(payload["agent_name"]),
+        "title": str(payload["title"]),
+        "stream_url": str(payload["stream_url"]),
+        "thumbnail_url": str(payload.get("thumbnail_url", "")),
+    }
+
+    _vantage_notifications.append(notification)
+    if len(_vantage_notifications) > _MAX_VANTAGE_NOTIFICATIONS:
+        _vantage_notifications.pop(0)
+
+    await _broadcast({"type": "vantage_notify", "event": "new_broadcast", **notification})
+    return {"status": "ok", "broadcast_id": notification["broadcast_id"]}
+
+
+@web_app.get("/api/v1/vantage/notifications")
+async def vantage_notifications(limit: int = 20):
+    """Return recent cross-post notifications (newest first)."""
+    items = list(reversed(_vantage_notifications[-limit:]))
+    return {"status": "ok", "items": items, "count": len(items)}
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────

@@ -1,11 +1,12 @@
 """Web scraping and content discovery."""
 
+import json
 import re
 import subprocess
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -20,6 +21,43 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/119.0.0.0 Safari/537.36"
 )
+
+# Known streaming domains — DDG results are filtered to these
+_STREAMING_DOMAINS = frozenset([
+    "gomovies.sx", "fmovies.ps", "bflix.gg", "bflix.sh", "hurawatch.cc",
+    "cataz.net", "hdtoday.cc", "hdtoday.tv", "myflixerz.to", "myflixerz.me",
+    "myflixer.cx", "cineby.ru", "lookmovie2.to", "cinezone.to", "goojara.to",
+    "afdah2.cyou", "2flix.com", "flixbaba.com", "123moviesfree.net",
+    "wootly.ch", "vexmovies.to", "yesmovies.ag", "yesmovies.to",
+    "azm.to", "youtube.com", "archive.org", "tubi.tv", "pluto.tv",
+])
+
+# Title substrings that indicate a trailer/clip not a full film
+_TRAILER_SUBS = (
+    " trailer", " teaser", "official trailer", "sneak peek", "first look",
+    "behind the scenes", "making of", "featurette", "deleted scene",
+    "bloopers", "gag reel", "tv spot", " promo", "extended clip",
+    "reaction:", "| reaction", " explained", "breakdown",
+)
+
+
+def _is_trailer_title(title: str) -> bool:
+    t = title.lower()
+    return any(s in t for s in _TRAILER_SUBS)
+
+
+def _decode_ddg_url(href: str) -> Optional[str]:
+    """Decode a DuckDuckGo redirect URL to the actual destination."""
+    if href.startswith("//duckduckgo.com/l/"):
+        href = "https:" + href
+    parsed = urlparse(href)
+    if parsed.netloc in ("duckduckgo.com",):
+        uddg = parse_qs(parsed.query).get("uddg", [""])[0]
+        if uddg:
+            return unquote(uddg)
+    if href.startswith("http"):
+        return href
+    return None
 
 # Regex patterns for robust embed extraction
 EMBED_PATTERNS = [
@@ -139,7 +177,14 @@ class ContentScraper:
         self, base_url: str, query: str, verbose: bool = False
     ) -> Tuple[str, List[Tuple[str, str]], float]:
         """Fetch results from a single provider (thread-safe)."""
-        full_url = self._build_search_url(base_url, query)
+        # Append "full movie" unless query already implies series/documentary
+        q_lower = query.lower()
+        if not any(w in q_lower for w in ("full movie", "documentary", "season ",
+                                           " s0", "episode", " ep ", "series")):
+            effective_query = f"{query} full movie"
+        else:
+            effective_query = query
+        full_url = self._build_search_url(base_url, effective_query)
         start = _time.time()
         try:
             if verbose:
@@ -330,6 +375,8 @@ class ContentScraper:
                 elif not href.startswith("http"):
                     continue
                 if ContentScraper._is_nav_link(text, href):
+                    continue
+                if _is_trailer_title(text):
                     continue
                 if href not in candidates:
                     candidates[href] = (text, href)
@@ -551,37 +598,92 @@ class ContentScraper:
 
     def search_duckduckgo(self, query: str) -> List[Tuple[str, str]]:
         """
-        Fallback search using DuckDuckGo for free streaming links.
-
-        Args:
-            query: Search query
-
-        Returns:
-            List of (title, url) tuples from DDG results
+        Fallback: DuckDuckGo HTML search filtered to known streaming domains.
+        Decodes DDG redirect URLs to get actual destination URLs.
         """
         try:
-            console.log(f"Searching DuckDuckGo for '{query}'...")
-            ddg_query = f"{query} watch free online site:youtube.com OR site:reddit.com"
-            url = "https://duckduckgo.com/html/"
-            
-            params = {"q": ddg_query}
-            response = self.session.get(url, params=params, timeout=10)
+            console.log(f"Searching DuckDuckGo for '{query} full movie'...")
+            ddg_query = f"{query} full movie watch online free"
+            response = self.session.get(
+                "https://duckduckgo.com/html/",
+                params={"q": ddg_query},
+                timeout=12,
+            )
             response.raise_for_status()
 
             soup = BeautifulSoup(response.content, "html.parser")
             results = []
 
-            # Extract DDG results
-            for result in soup.find_all("a", class_="result__url"):
-                link_text = result.get_text(strip=True)
-                link_href = result.get("href", "")
-                if link_text and link_href:
-                    results.append((link_text[:60], link_href))
+            for a in soup.find_all("a", class_="result__a"):
+                title = a.get_text(strip=True)
+                href = a.get("href", "")
+                if not href:
+                    continue
+
+                # Decode DDG's redirect wrapper  //duckduckgo.com/l/?uddg=...
+                actual_url = _decode_ddg_url(href)
+                if not actual_url:
+                    continue
+
+                # Only keep results from known streaming sites
+                domain = urlparse(actual_url).netloc.lstrip("www.")
+                if not any(d in domain for d in _STREAMING_DOMAINS):
+                    continue
+
+                if title and not _is_trailer_title(title):
+                    results.append((title[:80], actual_url))
 
             return results[:10]
 
         except Exception as e:
             console.log(f"[yellow]⚠[/yellow] DuckDuckGo search failed: {e}")
+            return []
+
+    def search_ytdlp_quick(self, query: str, min_duration: int = 600) -> List[Tuple[str, str]]:
+        """
+        Fast yt-dlp YouTube search — returns a selectable result list.
+        min_duration: minimum seconds (default 10 min; use 2400 for movies only).
+        """
+        import shutil
+        if not shutil.which("yt-dlp"):
+            return []
+
+        # Detect TV query to avoid appending "full movie"
+        q_lower = query.lower()
+        is_tv = any(w in q_lower for w in ("season ", " s0", "s1", "s2", "episode",
+                                            " ep ", "series", "show"))
+        search_term = query if is_tv else f"{query} full movie"
+
+        try:
+            console.log(f"[cyan]→[/cyan] yt-dlp search: '{search_term}'...")
+            result = subprocess.run(
+                [
+                    "yt-dlp", "--dump-json", "--flat-playlist",
+                    "--no-warnings", "--quiet",
+                    f"ytsearch15:{search_term}",
+                ],
+                capture_output=True, text=True, timeout=25,
+            )
+            items = []
+            for line in result.stdout.splitlines():
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                vid_id = d.get("id", "")
+                title = d.get("title", "")
+                duration = d.get("duration")
+                if not vid_id or not title:
+                    continue
+                if _is_trailer_title(title):
+                    continue
+                if duration is not None and duration < min_duration:
+                    continue
+                items.append((title, f"https://www.youtube.com/watch?v={vid_id}"))
+            if items:
+                console.log(f"[green]✓[/green] yt-dlp found {len(items)} results")
+            return items[:12]
+        except Exception:
             return []
 
     def _detect_stream_type(self, url: str) -> str:

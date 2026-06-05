@@ -137,18 +137,18 @@ async def v1_search(request: Request):
             plugin_results = []
 
         # Merge all results, score by relevance, deduplicate by URL
-        from franken_stream.async_scraper import _relevance_score
+        from franken_stream.async_scraper import _relevance_score, _is_trailer_title
         seen: set = set()
         scored = []
         for title, url in scraper_results:
-            if url not in seen:
+            if url not in seen and not _is_trailer_title(title):
                 seen.add(url)
                 scored.append((_relevance_score(title, query), title, url))
         for item in plugin_results:
             # plugin_results are MediaItem objects
             title = getattr(item, "title", "") if not isinstance(item, tuple) else item[0]
             url = getattr(item, "url", "") if not isinstance(item, tuple) else item[1]
-            if url and url not in seen:
+            if url and url not in seen and not _is_trailer_title(title):
                 seen.add(url)
                 scored.append((_relevance_score(title, query), title, url))
 

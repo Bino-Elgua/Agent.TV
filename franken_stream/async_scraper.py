@@ -57,6 +57,33 @@ _NAV_WORDS = frozenset([
     "load more", "see all", "view all", "subscribe", "download app",
 ])
 
+# Substrings that mark a result as a trailer/clip rather than a full film
+_TRAILER_SUBSTRINGS = (
+    "trailer", "teaser", "official trailer", "sneak peek", "first look",
+    "behind the scenes", "making of", "featurette", "deleted scene",
+    "bloopers", "gag reel", "tv spot", "promo", "extended clip",
+    "clip:", " clip ", "| clip", "reaction", "review", "ending explained",
+    "scene breakdown", "watch before", "everything you missed",
+)
+
+
+def _is_trailer_title(title: str) -> bool:
+    """Return True if the title looks like a trailer, teaser, or short clip."""
+    t = title.lower()
+    return any(sub in t for sub in _TRAILER_SUBSTRINGS)
+
+
+def _movie_query(query: str) -> str:
+    """
+    Append 'full movie' to a query unless it already implies full-length content.
+    Used when searching movie-specific provider bases.
+    """
+    q = query.lower()
+    if any(w in q for w in ("full movie", "watch online", "documentary",
+                             "season ", " s0", "episode", " ep ", "series")):
+        return query
+    return f"{query} full movie"
+
 
 def _relevance_score(title: str, query: str) -> int:
     """
@@ -208,6 +235,8 @@ class AsyncContentScraper:
 
                 if _is_nav_link(title, href):
                     continue
+                if _is_trailer_title(title):
+                    continue
 
                 if href not in candidates:
                     candidates[href] = (title, href)
@@ -244,7 +273,9 @@ class AsyncContentScraper:
         if self.circuit_breaker.is_open(provider_name):
             return []
 
-        search_url = self._build_search_url(base_url, query)
+        # Append "full movie" for movie-specific provider queries
+        effective_query = _movie_query(query)
+        search_url = self._build_search_url(base_url, effective_query)
         start = time.monotonic()
         try:
             html = await self._get_page(search_url)
@@ -256,7 +287,7 @@ class AsyncContentScraper:
                     self.provider_manager.record_result(base_url, False, elapsed_ms)
                 return []
 
-            results = self._extract_results(html, base_url, query)
+            results = self._extract_results(html, base_url, query)  # score against original query
             self.circuit_breaker.record_success(provider_name)
             if self.provider_manager:
                 self.provider_manager.record_result(base_url, True, elapsed_ms)

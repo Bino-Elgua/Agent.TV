@@ -1,47 +1,58 @@
 {
   "movie_search_bases": [
     "https://fmovies.ps/search/",
+    "https://fboxz.to/search/",
     "https://bflix.gg/search/",
+    "https://bflix.sh/search/",
+    "https://hurawatch.cc/search?keyword=",
     "https://cataz.net/search/",
     "https://hdtoday.cc/search/",
+    "https://hdtoday.tv/search/",
+    "https://gomovies.sx/search/",
+    "https://azm.to/search/",
+    "https://yesmovies.ag/search?keyword=",
+    "https://yesmovies.to/search/",
+    "https://myflixerz.to/search/",
+    "https://myflixerz.me/search/",
+    "https://myflixer.cx/search/",
+    "https://lookmovie2.to/search?q=",
+    "https://cineby.ru/search/",
     "https://cinezone.to/filter?keyword=",
     "https://goojara.to/?search=",
     "https://afdah2.cyou/search/",
-    "https://yesmovies.ag/search?keyword=",
-    "https://myflixerz.to/search/",
-    "https://myflixerz.me/search/",
-    "https://lookmovie2.to/search?q=",
-    "https://hurawatch.cc/search?keyword=",
     "https://2flix.com/search/",
     "https://flixbaba.com/search?q=",
     "https://123moviesfree.net/search/",
     "https://wootly.ch/search?q=",
-    "https://flixtorrent.to/search?q=",
-    "https://iosmovies.org/search?q=",
-    "https://myflixer.cx/search/"
+    "https://vexmovies.to/search/"
   ],
   "series_search_bases": [
     "https://fmovies.ps/search/",
     "https://bflix.gg/search/",
+    "https://hurawatch.cc/search?keyword=",
     "https://cataz.net/search/",
     "https://hdtoday.cc/search/",
+    "https://gomovies.sx/search/",
     "https://myflixerz.to/search/",
+    "https://cineby.ru/search/",
     "https://lookmovie2.to/search?q=",
     "https://goojara.to/?search=",
     "https://123moviesfree.net/search/"
   ],
   "embed_fallbacks": [
     "vidplay.online",
-    "streamtape.com",
-    "upstream.to",
-    "filemoon.sx",
-    "doodstream.com",
-    "mixdrop.co",
     "vidcloud9.com",
-    "mycloud"
+    "streamwish.com",
+    "filemoon.sx",
+    "streamtape.com",
+    "mixdrop.co",
+    "upstream.to",
+    "doodstream.com",
+    "mycloud",
+    "mega.nz"
   ],
   "legal_fallbacks": [
     "https://www.youtube.com/results?search_query="
   ],
-  "notes": "June 2026 — fmovies.ps, bflix.gg, cataz.net, hdtoday.cc most reliable. Plugin system handles YouTube (yt-dlp), Tubi, Pluto TV, Plex Free, and Archive.org with proper APIs."
+  "notes": "June 2026 — 25 scraper providers. Plugin system handles YouTube (yt-dlp), Tubi, Pluto TV, Plex Free, Archive.org. Real-Debrid support planned."
 }

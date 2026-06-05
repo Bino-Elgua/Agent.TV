@@ -307,21 +307,100 @@ async def rd_unrestrict(request: Request):
     return {"url": None, "reason": "URL not supported or unrestriction failed"}
 
 
+async def _ytdlp_extract(url: str, timeout: int = 45) -> Optional[dict]:
+    """
+    Run yt-dlp to extract a direct playable URL from a page.
+    Returns dict with 'stream_url', 'title', 'thumbnail', or None on failure.
+    Supports hundreds of sites — gomovies, fmovies, bflix, tubi, archive.org, etc.
+    """
+    import shutil
+    if not shutil.which("yt-dlp"):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp",
+            "--no-playlist",
+            "--no-check-certificate",
+            "--no-warnings",
+            "--dump-single-json",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+
+        if proc.returncode != 0 or not stdout:
+            return None
+
+        import json as _json
+        data = _json.loads(stdout.decode("utf-8", errors="ignore"))
+
+        # Prefer the requested format URL; fall back to any URL in formats
+        stream_url = data.get("url") or data.get("manifest_url")
+        if not stream_url:
+            # Try to find best format URL
+            for fmt in reversed(data.get("formats", [])):
+                u = fmt.get("url", "")
+                if u.startswith("http"):
+                    stream_url = u
+                    break
+
+        if not stream_url:
+            return None
+
+        return {
+            "stream_url": stream_url,
+            "title": data.get("title", ""),
+            "thumbnail": data.get("thumbnail", ""),
+            "ext": data.get("ext", ""),
+            "duration": data.get("duration"),
+        }
+    except Exception:
+        return None
+
+
 @web_app.post("/api/v1/extract")
 async def v1_extract(request: Request):
-    """Extract the embeddable player URL from a content page (async)."""
+    """
+    Extract a playable URL from a content page.
+    Tries yt-dlp first (supports 1000+ sites), falls back to regex scraping.
+    """
     data = await request.json()
     page_url = data.get("url", "").strip()
     if not page_url:
         raise HTTPException(status_code=400, detail="url is required")
 
+    # 1. yt-dlp — handles JS-heavy sites that regex scraping cannot
+    yt = await _ytdlp_extract(page_url)
+    if yt and yt.get("stream_url"):
+        return {
+            "status": "ok",
+            "embed_url": yt["stream_url"],
+            "stream_url": yt["stream_url"],
+            "type": "direct",
+            "title": yt.get("title"),
+            "thumbnail": yt.get("thumbnail"),
+            "fallback": page_url,
+        }
+
+    # 2. Regex scraping — catches plain iframes/HLS src attributes
     pm = ProviderManager()
     scraper = AsyncContentScraper(provider_manager=pm)
     try:
         embed_url = await scraper.fetch_embed_from_page(page_url)
-        return {"status": "ok", "embed_url": embed_url, "fallback": page_url}
+        return {
+            "status": "ok",
+            "embed_url": embed_url,
+            "type": "embed" if embed_url else "none",
+            "fallback": page_url,
+        }
     except Exception:
-        return {"status": "ok", "embed_url": None, "fallback": page_url}
+        return {"status": "ok", "embed_url": None, "type": "none", "fallback": page_url}
     finally:
         await scraper.close()
 

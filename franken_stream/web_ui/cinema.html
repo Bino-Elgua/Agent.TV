@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cinema — Franken-Stream</title>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <!-- HLS.js — plays .m3u8 streams natively in the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     body{background:#0a0a0f;color:#fff;font-family:'Inter','Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden;}
@@ -73,7 +75,9 @@
     .ply-title{font-size:.9rem;font-weight:600;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .ply-close{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:6px;color:#fff;cursor:pointer;font-size:.82rem;padding:5px 14px;transition:all .2s;}
     .ply-close:hover{background:rgba(255,60,60,.18);border-color:#ff4444;color:#ff4444;}
-    .ply-frame{flex:1;width:100%;border:none;background:#000;}
+    .ply-frame{flex:1;width:100%;border:none;background:#000;display:none;}
+    .ply-video{flex:1;width:100%;background:#000;display:none;outline:none;}
+    .ply-video.active,.ply-frame.active{display:block;}
     .ply-loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:rgba(255,255,255,.45);font-size:.88rem;pointer-events:none;z-index:5;}
     .ply-loading .spin{width:34px;height:34px;border:3px solid rgba(0,240,255,.18);border-top-color:#00f0ff;border-radius:50%;animation:spin .8s linear infinite;}
     .ply-err{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(0,0,0,.95);z-index:6;}
@@ -180,6 +184,10 @@
     <a id="plyErrOpen" class="ply-err-open" target="_blank" rel="noopener">Open in Browser ↗</a>
     <button id="plyErrClose" class="ply-close" style="margin-top:8px;">Close</button>
   </div>
+  <!-- Native video element — used when yt-dlp returns a direct stream URL -->
+  <video id="plyVideo" class="ply-video" controls autoplay playsinline
+         controlslist="nodownload"></video>
+  <!-- Iframe fallback — used for embed URLs when yt-dlp can't extract -->
   <iframe id="plyFrame" class="ply-frame" allowfullscreen
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
           referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"></iframe>
@@ -227,7 +235,10 @@ $('plyErrClose').addEventListener('click', closePlayer);
 document.addEventListener('keydown', e => {
   if (playerOpen) {
     if (e.key === 'Escape') closePlayer();
-    else if (e.key === 'f' || e.key === 'F') $('plyFrame').requestFullscreen?.();
+    else if (e.key === 'f' || e.key === 'F') {
+      const el = $('plyVideo').classList.contains('active') ? $('plyVideo') : $('plyFrame');
+      el.requestFullscreen?.();
+    }
     return;
   }
   if (e.key === 'Escape') resetWelcome();
@@ -381,6 +392,8 @@ function applyPoster(img, letter, src) {
 }
 
 // ── Playback ───────────────────────────────────────────────────────────────
+let _hls = null;
+
 async function playItem(idx) {
   const item = results[idx];
   if (!item) return;
@@ -392,15 +405,18 @@ async function playItem(idx) {
   $('plyLoad').style.display = 'flex';
   $('plyErr').style.display = 'none';
   $('plyFrame').src = 'about:blank';
+  $('plyFrame').className = 'ply-frame';
+  $('plyVideo').className = 'ply-video';
   $('ply').classList.add('open');
   playerOpen = true;
-  status('Extracting player for: ' + item.title);
+  status('Extracting stream for: ' + item.title);
 
+  // Step 1: Try yt-dlp extraction (returns direct stream URL) + regex fallback
   let playUrl = item.url;
+  let streamType = 'iframe';
 
-  // Step 1: Extract embed URL from the page
   try {
-    $('plyLoadTxt').textContent = 'Extracting player embed…';
+    $('plyLoadTxt').textContent = 'Extracting stream (yt-dlp)…';
     const r = await fetch('/api/v1/extract', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -408,15 +424,18 @@ async function playItem(idx) {
     });
     if (r.ok) {
       const d = await r.json();
-      if (d.embed_url) {
-        playUrl = d.embed_url;
-        $('plyLoadTxt').textContent = 'Loading ' + host(playUrl) + '…';
+      if (d.stream_url || d.embed_url) {
+        playUrl = d.stream_url || d.embed_url;
+        streamType = d.type === 'direct' ? 'direct' : 'iframe';
+        $('plyLoadTxt').textContent = streamType === 'direct'
+          ? '▶ Direct stream found — loading…'
+          : 'Loading embed from ' + host(playUrl) + '…';
       }
     }
   } catch (_) {}
 
-  // Step 2: Real-Debrid unrestriction if available
-  if (rdAvailable && playUrl !== item.url) {
+  // Step 2: Real-Debrid unrestriction
+  if (rdAvailable) {
     try {
       const r = await fetch('/api/v1/unrestrict', {
         method: 'POST',
@@ -425,36 +444,77 @@ async function playItem(idx) {
       });
       if (r.ok) {
         const d = await r.json();
-        if (d.url) { playUrl = d.url; $('plyLoadTxt').textContent = 'Loading via Real-Debrid…'; }
+        if (d.url) {
+          playUrl = d.url;
+          streamType = 'direct'; // RD always returns a direct URL
+          $('plyLoadTxt').textContent = '▶ Real-Debrid stream — loading…';
+        }
       }
     } catch (_) {}
   }
 
-  // Step 3: Load in iframe
   $('plyErrOpen').href = playUrl;
-  $('plyFrame').src = playUrl;
 
-  // Detect load vs. block
-  let loaded = false;
-  $('plyFrame').onload = () => {
-    loaded = true;
-    $('plyLoad').style.display = 'none';
-    $('plyErr').style.display = 'none';
-  };
+  // Step 3a: Native video player for direct stream URLs (.m3u8, .mp4, or RD)
+  if (streamType === 'direct') {
+    const video = $('plyVideo');
+    video.className = 'ply-video active';
 
-  // After 12s with no load, show "open in browser" fallback
-  setTimeout(() => {
-    if (!loaded) {
-      $('plyLoad').style.display = 'none';
-      $('plyErr').style.display = 'flex';
-      $('plyErrMsg').textContent = 'Could not load the player. This site may block embedding — try opening it directly.';
-      $('plyErrOpen').href = playUrl;
+    // HLS.js for .m3u8 streams
+    if (playUrl.includes('.m3u8') || playUrl.includes('manifest')) {
+      if (Hls.isSupported()) {
+        if (_hls) { _hls.destroy(); }
+        _hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+        _hls.loadSource(playUrl);
+        _hls.attachMedia(video);
+        _hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          $('plyLoad').style.display = 'none';
+          video.play().catch(() => {});
+        });
+        _hls.on(Hls.Events.ERROR, (_, d) => {
+          if (d.fatal) showPlayerError(playUrl, 'HLS stream error — try opening directly.');
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Safari native HLS
+        video.src = playUrl;
+        video.addEventListener('loadedmetadata', () => {
+          $('plyLoad').style.display = 'none';
+          video.play().catch(() => {});
+        }, {once: true});
+      }
+    } else {
+      // Plain MP4 / WebM / etc.
+      video.src = playUrl;
+      video.addEventListener('canplay', () => {
+        $('plyLoad').style.display = 'none';
+      }, {once: true});
+      video.addEventListener('error', () => {
+        showPlayerError(playUrl, 'Video failed to load — try opening directly.');
+      }, {once: true});
+      video.play().catch(() => {});
     }
-  }, 12000);
 
-  status('Playing: ' + item.title);
+    status('▶ Playing: ' + item.title);
 
-  // Notify backend player (VLC/mpv) non-blocking
+  // Step 3b: Iframe for embed URLs
+  } else {
+    $('plyFrame').className = 'ply-frame active';
+    $('plyFrame').src = playUrl;
+
+    let loaded = false;
+    $('plyFrame').onload = () => {
+      loaded = true;
+      $('plyLoad').style.display = 'none';
+    };
+    setTimeout(() => {
+      if (!loaded) showPlayerError(playUrl,
+        'This site blocks embedding. Open it directly — or the stream may not be available in this region.');
+    }, 14000);
+
+    status('Playing: ' + item.title);
+  }
+
+  // Notify backend (VLC/mpv) — non-blocking
   fetch('/api/v1/play', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -462,8 +522,24 @@ async function playItem(idx) {
   }).catch(() => {});
 }
 
+function showPlayerError(url, msg) {
+  $('plyLoad').style.display = 'none';
+  $('plyErr').style.display = 'flex';
+  $('plyErrMsg').textContent = msg;
+  $('plyErrOpen').href = url;
+}
+
 function closePlayer() {
+  // Tear down HLS
+  if (_hls) { _hls.destroy(); _hls = null; }
+  const video = $('plyVideo');
+  video.pause();
+  video.src = '';
+  video.className = 'ply-video';
+
   $('plyFrame').src = 'about:blank';
+  $('plyFrame').className = 'ply-frame';
+
   $('ply').classList.remove('open');
   $('plyLoad').style.display = 'none';
   $('plyErr').style.display = 'none';

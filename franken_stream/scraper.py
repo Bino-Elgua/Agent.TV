@@ -639,21 +639,28 @@ class ContentScraper:
             console.log(f"[yellow]⚠[/yellow] DuckDuckGo search failed: {e}")
             return []
 
-    def search_ytdlp_quick(self, query: str) -> List[Tuple[str, str]]:
+    def search_ytdlp_quick(self, query: str, min_duration: int = 600) -> List[Tuple[str, str]]:
         """
-        Fast yt-dlp YouTube search for full movies/shows.
-        Used as a reliable fallback when scrapers return nothing.
+        Fast yt-dlp YouTube search — returns a selectable result list.
+        min_duration: minimum seconds (default 10 min; use 2400 for movies only).
         """
         import shutil
         if not shutil.which("yt-dlp"):
             return []
+
+        # Detect TV query to avoid appending "full movie"
+        q_lower = query.lower()
+        is_tv = any(w in q_lower for w in ("season ", " s0", "s1", "s2", "episode",
+                                            " ep ", "series", "show"))
+        search_term = query if is_tv else f"{query} full movie"
+
         try:
-            console.log(f"[cyan]→[/cyan] yt-dlp search: '{query} full movie'...")
+            console.log(f"[cyan]→[/cyan] yt-dlp search: '{search_term}'...")
             result = subprocess.run(
                 [
                     "yt-dlp", "--dump-json", "--flat-playlist",
                     "--no-warnings", "--quiet",
-                    f"ytsearch12:{query} full movie",
+                    f"ytsearch15:{search_term}",
                 ],
                 capture_output=True, text=True, timeout=25,
             )
@@ -670,13 +677,12 @@ class ContentScraper:
                     continue
                 if _is_trailer_title(title):
                     continue
-                # Skip clips shorter than 40 min for movie searches
-                if duration is not None and duration < 2400:
+                if duration is not None and duration < min_duration:
                     continue
                 items.append((title, f"https://www.youtube.com/watch?v={vid_id}"))
             if items:
                 console.log(f"[green]✓[/green] yt-dlp found {len(items)} results")
-            return items[:10]
+            return items[:12]
         except Exception:
             return []
 

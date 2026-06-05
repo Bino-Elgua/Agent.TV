@@ -186,10 +186,27 @@ def tv(
         results = scraper.search(search_query, bases)
 
         if not results:
-            console.print("[yellow]⚠[/yellow] No episodes found.")
-            if scraper.stream_with_yt_dlp(search_query):
-                return
-            raise typer.Exit(1)
+            console.print("[yellow]⚠[/yellow] No results from providers.")
+
+            # 1. yt-dlp YouTube search — shows selectable list
+            console.print("[cyan]→[/cyan] Searching YouTube via yt-dlp...")
+            results = scraper.search_ytdlp_quick(search_query)
+            if results:
+                console.print(f"[green]✓[/green] Found {len(results)} via yt-dlp")
+
+            # 2. DuckDuckGo filtered to streaming sites
+            if not results:
+                console.print("[cyan]→[/cyan] Trying DuckDuckGo (streaming sites)...")
+                results = scraper.search_duckduckgo(search_query)
+                if results:
+                    console.print(f"[green]✓[/green] Found {len(results)} via DDG")
+
+            # 3. Direct stream — last resort
+            if not results:
+                console.print("[cyan]→[/cyan] Streaming directly with yt-dlp...")
+                if scraper.stream_with_yt_dlp(search_query):
+                    return
+                raise typer.Exit(1)
 
         _display_results(results)
         _handle_selection(results, scraper)

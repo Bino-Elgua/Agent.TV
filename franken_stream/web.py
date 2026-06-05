@@ -6,6 +6,13 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Set
 
+# Load .env from repo root (or cwd) if present — no-op if file is missing
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass
+
 import typer
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse

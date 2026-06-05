@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Set
@@ -297,6 +298,61 @@ async def rd_unrestrict(request: Request):
     if premium_url:
         return {"url": premium_url, "original": source_url}
     return {"url": None, "reason": "URL not supported or unrestriction failed"}
+
+
+@web_app.post("/api/v1/extract")
+async def v1_extract(request: Request):
+    """Extract the embeddable player URL from a content page (async)."""
+    data = await request.json()
+    page_url = data.get("url", "").strip()
+    if not page_url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    pm = ProviderManager()
+    scraper = AsyncContentScraper(provider_manager=pm)
+    try:
+        embed_url = await scraper.fetch_embed_from_page(page_url)
+        return {"status": "ok", "embed_url": embed_url, "fallback": page_url}
+    except Exception:
+        return {"status": "ok", "embed_url": None, "fallback": page_url}
+    finally:
+        await scraper.close()
+
+
+@web_app.get("/api/v1/poster")
+async def v1_poster(title: str, year: Optional[str] = None):
+    """
+    Return a poster image URL for a movie/show title.
+    Requires TMDB_API_KEY env var. Returns null poster_url if unavailable.
+    """
+    import aiohttp as _aio
+    tmdb_key = os.environ.get("TMDB_API_KEY", "")
+    if not tmdb_key:
+        return {"poster_url": None, "source": "none"}
+
+    try:
+        params: dict = {"api_key": tmdb_key, "query": title, "page": 1}
+        if year:
+            params["year"] = year
+        async with _aio.ClientSession() as s:
+            async with s.get(
+                "https://api.themoviedb.org/3/search/multi",
+                params=params,
+                timeout=_aio.ClientTimeout(total=5),
+            ) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    for item in data.get("results", [])[:4]:
+                        poster = item.get("poster_path")
+                        if poster:
+                            return {
+                                "poster_url": f"https://image.tmdb.org/t/p/w342{poster}",
+                                "source": "tmdb",
+                            }
+    except Exception:
+        pass
+
+    return {"poster_url": None, "source": "none"}
 
 
 @web_app.post("/api/v1/play")

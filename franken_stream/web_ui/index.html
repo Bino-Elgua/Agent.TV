@@ -10,15 +10,30 @@
     <script type="module" crossorigin src="/assets/index-CYMyP-lN.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-4_iM7h6e.css">
     <style>
-      /* Cap decorative SVG icons so they don't fill the viewport */
-      svg:not([class*="vjs"]) {
-        max-width: 80px !important;
-        max-height: 80px !important;
-      }
-      /* Keep inline text icons small */
-      button svg, a svg, nav svg, header svg, .icon svg {
+      /* Force all lucide/decorative SVGs to a reasonable size */
+      #root svg {
+        width: 24px !important;
+        height: 24px !important;
+        min-width: unset !important;
+        min-height: unset !important;
         max-width: 24px !important;
         max-height: 24px !important;
+      }
+      /* Allow section hero icons to be a bit bigger but still bounded */
+      #root .section-icon svg,
+      #root .hero-icon svg,
+      #root .empty-state svg {
+        width: 64px !important;
+        height: 64px !important;
+        max-width: 64px !important;
+        max-height: 64px !important;
+      }
+      /* Video.js internal SVGs must be unaffected */
+      .video-js svg, .vjs-tech svg {
+        width: unset !important;
+        height: unset !important;
+        max-width: unset !important;
+        max-height: unset !important;
       }
     </style>
   </head>

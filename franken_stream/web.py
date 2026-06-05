@@ -16,6 +16,7 @@ from franken_stream.cache import FTSCache
 from franken_stream.player import PremiumPlayer
 from franken_stream.preloader import PredictiveLoader
 from franken_stream.providers import ProviderManager
+from franken_stream.real_debrid import get_client as get_rd_client
 from franken_stream.scraper import ContentScraper
 from franken_stream.watchlist import Watchlist
 
@@ -52,12 +53,23 @@ if _ASSETS_DIR.exists():
     web_app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
 
 
+CINEMA_FILE = WEB_UI_DIR / "cinema.html"
+
+
 @web_app.get("/", response_class=HTMLResponse)
 async def root():
     """Serve the main web UI"""
     if not INDEX_FILE.exists():
         raise HTTPException(status_code=404, detail="Web UI not found")
     return FileResponse(INDEX_FILE, media_type="text/html")
+
+
+@web_app.get("/cinema", response_class=HTMLResponse)
+async def cinema():
+    """Serve the TV Cinema Mode UI"""
+    if not CINEMA_FILE.exists():
+        raise HTTPException(status_code=404, detail="Cinema UI not found")
+    return FileResponse(CINEMA_FILE, media_type="text/html")
 
 
 @web_app.get("/api/health")
@@ -257,6 +269,36 @@ async def v1_embed(media_id: str):
 
 # ── v1 Playback (direct URL) ──────────────────────────────────────────────────
 
+@web_app.get("/api/v1/real-debrid/status")
+async def rd_status():
+    """Return Real-Debrid availability and account info."""
+    rd = get_rd_client()
+    if rd is None:
+        return {"available": False, "reason": "REAL_DEBRID_API_KEY not set"}
+    alive = await rd.is_alive()
+    if not alive:
+        return {"available": False, "reason": "Invalid or expired API key"}
+    return {"available": True}
+
+
+@web_app.post("/api/v1/unrestrict")
+async def rd_unrestrict(request: Request):
+    """Unrestrict a URL via Real-Debrid. Returns {url} on success."""
+    data = await request.json()
+    source_url = data.get("url", "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    rd = get_rd_client()
+    if rd is None:
+        return {"url": None, "reason": "Real-Debrid not configured"}
+
+    premium_url = await rd.unrestrict(source_url)
+    if premium_url:
+        return {"url": premium_url, "original": source_url}
+    return {"url": None, "reason": "URL not supported or unrestriction failed"}
+
+
 @web_app.post("/api/v1/play")
 async def v1_play(request: Request):
     data = await request.json()
@@ -264,6 +306,17 @@ async def v1_play(request: Request):
     title = data.get("title", "")
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
+
+    # Attempt Real-Debrid unrestriction if configured
+    rd = get_rd_client()
+    if rd is not None:
+        try:
+            premium = await rd.unrestrict(url)
+            if premium:
+                url = premium
+        except Exception:
+            pass
+
     result = await _player.play(url, title=title)
     if result.get("status") == "playing":
         media_id = hashlib.md5(url.encode()).hexdigest()[:12]
@@ -345,7 +398,17 @@ async def player_spin_up(request: Request):
     finally:
         await scraper2.close()
 
-    # 3. Spin up player
+    # 3. Optionally unrestrict via Real-Debrid
+    rd = get_rd_client()
+    if rd is not None:
+        try:
+            premium = await rd.unrestrict(play_url)
+            if premium:
+                play_url = premium
+        except Exception:
+            pass
+
+    # 4. Spin up player
     result = await _player.play(play_url, title=title)
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message", "Player error"))

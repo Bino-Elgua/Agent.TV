@@ -63,7 +63,7 @@ class ProviderManager:
         self.health_db = self.config_dir / "provider_health.db"
         self.github_url = (
             "https://raw.githubusercontent.com/"
-            "Bino-Elgua/franken-stream/main/providers.json"
+            "Bino-Elgua/Agent.TV/main/franken_stream/providers.json"
         )
         self.providers: Optional[Dict[str, Any]] = None
         self.health: Dict[str, ProviderStats] = self._load_health()

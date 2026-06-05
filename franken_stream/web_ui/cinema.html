@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cinema — Franken-Stream</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{background:#000;color:#fff;font-family:'Inter','Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden;}
+
+    /* Header */
+    .header{display:flex;align-items:center;justify-content:space-between;padding:18px 36px;background:linear-gradient(180deg,rgba(0,0,0,.95) 0%,transparent 100%);position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(4px);}
+    .logo{font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:900;background:linear-gradient(90deg,#00f0ff,#9900ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-transform:uppercase;letter-spacing:2px;white-space:nowrap;}
+    .search-wrap{display:flex;gap:10px;flex:1;max-width:580px;margin:0 32px;}
+    .search-input{flex:1;background:rgba(255,255,255,.07);border:1px solid rgba(0,240,255,.25);border-radius:8px;color:#fff;font-size:.95rem;padding:10px 16px;outline:none;transition:all .2s;}
+    .search-input::placeholder{color:rgba(255,255,255,.3);}
+    .search-input:focus{border-color:#00f0ff;background:rgba(0,240,255,.05);box-shadow:0 0 0 2px rgba(0,240,255,.1);}
+    .search-btn{background:linear-gradient(135deg,rgba(0,240,255,.15),rgba(153,0,255,.15));border:1px solid #00f0ff;border-radius:8px;color:#00f0ff;cursor:pointer;font-size:.9rem;padding:10px 20px;transition:all .2s;white-space:nowrap;}
+    .search-btn:hover,.search-btn:focus{background:linear-gradient(135deg,rgba(0,240,255,.3),rgba(153,0,255,.3));box-shadow:0 0 12px rgba(0,240,255,.25);}
+    .back-link{color:rgba(255,255,255,.4);text-decoration:none;font-size:.85rem;white-space:nowrap;transition:color .2s;}
+    .back-link:hover{color:#00f0ff;}
+
+    /* Main */
+    .main{padding:100px 36px 80px;}
+
+    /* Section */
+    .section{margin-bottom:48px;}
+    .section-title{font-family:'Orbitron',monospace;font-size:.78rem;font-weight:700;color:#00f0ff;text-transform:uppercase;letter-spacing:3px;margin-bottom:20px;display:flex;align-items:center;gap:12px;}
+    .section-title::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(0,240,255,.3),transparent);}
+
+    /* Suggestion chips */
+    .chips{display:flex;flex-wrap:wrap;gap:10px;}
+    .chip{background:rgba(0,240,255,.07);border:1px solid rgba(0,240,255,.2);border-radius:20px;color:rgba(0,240,255,.75);cursor:pointer;font-size:.82rem;padding:7px 16px;transition:all .2s;}
+    .chip:hover,.chip:focus{background:rgba(0,240,255,.16);border-color:#00f0ff;color:#00f0ff;outline:none;}
+
+    /* Card row */
+    .card-row{display:flex;gap:14px;overflow-x:auto;padding-bottom:10px;scrollbar-width:thin;scrollbar-color:rgba(0,240,255,.2) transparent;}
+    .card-row::-webkit-scrollbar{height:4px;}
+    .card-row::-webkit-scrollbar-track{background:transparent;}
+    .card-row::-webkit-scrollbar-thumb{background:rgba(0,240,255,.2);border-radius:2px;}
+
+    /* Card */
+    .card{flex:0 0 148px;cursor:pointer;border-radius:10px;overflow:hidden;border:2px solid transparent;transition:all .2s ease;background:rgba(255,255,255,.04);outline:none;}
+    .card:hover,.card.focused{border-color:#00f0ff;transform:scale(1.06);box-shadow:0 0 20px rgba(0,240,255,.3);}
+    .card-poster{width:148px;height:210px;background:linear-gradient(135deg,#1a1a2e,#0d0d1a);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
+    .card-poster-icon{font-size:2.5rem;z-index:1;}
+    .card-overlay{position:absolute;inset:0;background:linear-gradient(180deg,transparent 50%,rgba(0,0,0,.85) 100%);}
+    .card-play-icon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.2rem;opacity:0;background:rgba(0,0,0,.45);transition:opacity .2s;}
+    .card:hover .card-play-icon,.card.focused .card-play-icon{opacity:1;}
+    .card-info{padding:9px 11px;}
+    .card-title{font-size:.78rem;font-weight:500;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.35;}
+    .card-src{font-size:.68rem;color:rgba(0,240,255,.55);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+    /* RD badge */
+    .rd-badge{display:inline-block;background:rgba(0,200,80,.15);border:1px solid rgba(0,200,80,.4);border-radius:4px;color:rgba(0,200,80,.9);font-size:.6rem;font-weight:700;letter-spacing:.5px;padding:1px 6px;text-transform:uppercase;vertical-align:middle;margin-left:5px;}
+
+    /* Status bar */
+    .statusbar{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.92);border-top:1px solid rgba(255,255,255,.07);padding:10px 36px;display:flex;align-items:center;justify-content:space-between;font-size:.75rem;color:rgba(255,255,255,.35);backdrop-filter:blur(8px);}
+    .keys{display:flex;gap:18px;}
+    .key-hint{display:flex;align-items:center;gap:5px;}
+    .key{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);border-radius:4px;padding:2px 7px;font-family:monospace;font-size:.7rem;color:rgba(255,255,255,.55);}
+    .status-txt{color:#00f0ff;font-size:.78rem;}
+
+    /* Player overlay */
+    .player-overlay{position:fixed;inset:0;background:#000;z-index:1000;display:none;flex-direction:column;}
+    .player-overlay.open{display:flex;}
+    .player-header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;background:rgba(0,0,0,.8);position:absolute;top:0;left:0;right:0;z-index:10;opacity:0;transition:opacity .3s;}
+    .player-overlay.open:hover .player-header,.player-overlay.open:focus-within .player-header{opacity:1;}
+    .player-title-txt{font-size:.95rem;font-weight:600;}
+    .player-close-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:6px;color:#fff;cursor:pointer;font-size:.85rem;padding:6px 16px;transition:all .2s;}
+    .player-close-btn:hover{background:rgba(255,60,60,.2);border-color:#ff4444;color:#ff4444;}
+    .player-frame{flex:1;width:100%;border:none;background:#000;}
+    .player-spin-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:rgba(255,255,255,.5);font-size:.9rem;pointer-events:none;}
+    .player-spin-msg .spinner{width:36px;height:36px;border:3px solid rgba(0,240,255,.2);border-top-color:#00f0ff;border-radius:50%;animation:spin .8s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+
+    /* Loading */
+    .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:70px 0;gap:16px;}
+    .loading .spinner{width:38px;height:38px;border:3px solid rgba(0,240,255,.2);border-top-color:#00f0ff;border-radius:50%;animation:spin .8s linear infinite;}
+    .loading-txt{color:rgba(255,255,255,.35);font-size:.88rem;}
+
+    /* Empty */
+    .empty{text-align:center;padding:60px 20px;color:rgba(255,255,255,.28);}
+    .empty-icon{font-size:4rem;margin-bottom:14px;}
+    .empty-title{font-family:'Orbitron',monospace;font-size:1rem;margin-bottom:8px;}
+    .empty-sub{font-size:.85rem;}
+
+    /* Toast */
+    .toast{position:fixed;bottom:60px;right:22px;background:rgba(16,16,20,.96);border:1px solid rgba(255,100,100,.35);border-radius:8px;color:#ff9999;font-size:.82rem;max-width:300px;padding:11px 15px;transform:translateY(70px);opacity:0;transition:all .3s;z-index:2000;pointer-events:none;}
+    .toast.show{transform:translateY(0);opacity:1;}
+
+    /* RD status dot */
+    .rd-status{display:flex;align-items:center;gap:6px;font-size:.75rem;}
+    .rd-dot{width:7px;height:7px;border-radius:50%;background:#444;}
+    .rd-dot.active{background:#00c851;box-shadow:0 0 5px #00c851;}
+    .rd-dot.inactive{background:#666;}
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">🎬 Cinema</div>
+  <div class="search-wrap">
+    <input id="searchInput" class="search-input" type="text"
+           placeholder="Search movies, TV shows, anime…" autocomplete="off" spellcheck="false">
+    <button id="searchBtn" class="search-btn">Search</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="rd-status" id="rdStatus" title="Real-Debrid status">
+      <span class="rd-dot inactive" id="rdDot"></span>
+      <span id="rdLabel" style="color:rgba(255,255,255,.3)">RD</span>
+    </div>
+    <a href="/" class="back-link">← Main UI</a>
+  </div>
+</header>
+
+<main class="main">
+  <div id="welcomeView">
+    <div class="section">
+      <div class="section-title">Quick Search</div>
+      <div class="chips" id="suggestionChips">
+        <span class="chip" tabindex="0">Inception</span>
+        <span class="chip" tabindex="0">The Dark Knight</span>
+        <span class="chip" tabindex="0">Interstellar</span>
+        <span class="chip" tabindex="0">Breaking Bad</span>
+        <span class="chip" tabindex="0">The Matrix</span>
+        <span class="chip" tabindex="0">Oppenheimer</span>
+        <span class="chip" tabindex="0">Dune Part Two</span>
+        <span class="chip" tabindex="0">Pulp Fiction</span>
+        <span class="chip" tabindex="0">Avatar</span>
+        <span class="chip" tabindex="0">The Godfather</span>
+        <span class="chip" tabindex="0">John Wick</span>
+        <span class="chip" tabindex="0">Fight Club</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="loadingView" style="display:none;" class="loading">
+    <div class="spinner"></div>
+    <div class="loading-txt">Searching…</div>
+  </div>
+
+  <div id="resultsView" style="display:none;">
+    <div class="section">
+      <div class="section-title" id="resultsTitle">Results</div>
+      <div class="card-row" id="cardRow"></div>
+    </div>
+  </div>
+</main>
+
+<div class="statusbar">
+  <div class="keys">
+    <span class="key-hint"><span class="key">← →</span> Navigate</span>
+    <span class="key-hint"><span class="key">Enter</span> Play</span>
+    <span class="key-hint"><span class="key">Esc</span> Back</span>
+    <span class="key-hint"><span class="key">/</span> Search</span>
+    <span class="key-hint"><span class="key">F</span> Fullscreen</span>
+  </div>
+  <span id="statusTxt" class="status-txt"></span>
+  <span>Franken-Stream Cinema Mode</span>
+</div>
+
+<!-- Player overlay -->
+<div id="playerOverlay" class="player-overlay">
+  <div class="player-header">
+    <span id="playerTitleTxt" class="player-title-txt"></span>
+    <button class="player-close-btn" id="playerCloseBtn">✕ Close (Esc)</button>
+  </div>
+  <div id="playerSpinMsg" class="player-spin-msg">
+    <div class="spinner"></div>
+    <div>Loading player…</div>
+  </div>
+  <iframe id="playerFrame" class="player-frame" allowfullscreen
+          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+          referrerpolicy="no-referrer"></iframe>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+  'use strict';
+
+  let results = [];
+  let focusIdx = 0;
+  let playerOpen = false;
+  let rdAvailable = false;
+
+  const $ = id => document.getElementById(id);
+  const searchInput = $('searchInput');
+  const cardRow = $('cardRow');
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+
+  searchInput.focus();
+  checkRD();
+
+  // Suggestion chips
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => doSearch(chip.textContent.trim()));
+    chip.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') doSearch(chip.textContent.trim());
+    });
+  });
+
+  // Search controls
+  $('searchBtn').addEventListener('click', () => doSearch());
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') doSearch();
+    else if (e.key === 'ArrowDown') { e.preventDefault(); focusCard(0); }
+  });
+
+  // Close player
+  $('playerCloseBtn').addEventListener('click', closePlayer);
+
+  // Global keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (playerOpen) {
+      if (e.key === 'Escape') closePlayer();
+      else if (e.key === 'f' || e.key === 'F') $('playerFrame').requestFullscreen?.();
+      return;
+    }
+    if (e.key === 'Escape') resetToWelcome();
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+  });
+
+  // ── Real-Debrid status ─────────────────────────────────────────────────────
+
+  async function checkRD() {
+    try {
+      const r = await fetch('/api/v1/real-debrid/status');
+      if (!r.ok) return;
+      const d = await r.json();
+      rdAvailable = d.available === true;
+      $('rdDot').className = 'rd-dot ' + (rdAvailable ? 'active' : 'inactive');
+      $('rdLabel').textContent = 'RD';
+      $('rdLabel').style.color = rdAvailable ? 'rgba(0,200,81,.85)' : 'rgba(255,255,255,.3)';
+      $('rdStatus').title = rdAvailable
+        ? 'Real-Debrid active — premium links enabled'
+        : 'Real-Debrid not configured (set REAL_DEBRID_API_KEY)';
+    } catch (_) {}
+  }
+
+  // ── Search ─────────────────────────────────────────────────────────────────
+
+  async function doSearch(q) {
+    q = (q || searchInput.value).trim();
+    if (!q) return;
+    searchInput.value = q;
+
+    showView('loading');
+    setStatus('Searching…');
+
+    try {
+      const res = await fetch('/api/v1/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      results = data.results || [];
+      renderResults(q, results);
+    } catch (err) {
+      showView('welcome');
+      toast('Search failed: ' + err.message);
+      setStatus('Search error');
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  function renderResults(query, items) {
+    $('resultsTitle').textContent = `"${query}" — ${items.length} result${items.length !== 1 ? 's' : ''}`;
+    cardRow.innerHTML = '';
+    focusIdx = 0;
+
+    if (!items.length) {
+      cardRow.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><div class="empty-title">No Signal</div><div class="empty-sub">No results found for "${escHtml(query)}"</div></div>`;
+      showView('results');
+      setStatus('No results');
+      return;
+    }
+
+    const icons = ['🎬', '🎥', '📽', '🎞', '🍿', '📺', '🎭', '🎪'];
+
+    items.slice(0, 24).forEach((item, i) => {
+      const card = document.createElement('div');
+      card.className = 'card' + (i === 0 ? ' focused' : '');
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', 'Play ' + item.title);
+
+      const icon = icons[i % icons.length];
+      const domain = getDomain(item.url);
+      const rdBadge = (item.rd_unrestricted || rdAvailable) ? '<span class="rd-badge">RD</span>' : '';
+
+      card.innerHTML = `
+        <div class="card-poster">
+          <div class="card-overlay"></div>
+          <div class="card-play-icon">▶</div>
+          <span class="card-poster-icon">${icon}</span>
+        </div>
+        <div class="card-info">
+          <div class="card-title">${escHtml(item.title)}${rdBadge}</div>
+          <div class="card-src">${escHtml(domain)}</div>
+        </div>`;
+
+      card.addEventListener('click', () => playItem(i));
+      card.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playItem(i); }
+        else if (e.key === 'ArrowRight') focusCard(i + 1);
+        else if (e.key === 'ArrowLeft') focusCard(i - 1);
+        else if (e.key === 'Escape') searchInput.focus();
+      });
+
+      cardRow.appendChild(card);
+    });
+
+    showView('results');
+    setStatus(`${items.length} results — ← → to browse, Enter to play`);
+
+    setTimeout(() => {
+      const first = cardRow.querySelector('.card');
+      if (first) first.focus();
+    }, 80);
+  }
+
+  function focusCard(idx) {
+    const cards = cardRow.querySelectorAll('.card');
+    if (!cards.length) return;
+    idx = Math.max(0, Math.min(cards.length - 1, idx));
+    cards.forEach(c => c.classList.remove('focused'));
+    cards[idx].classList.add('focused');
+    cards[idx].focus();
+    cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    focusIdx = idx;
+  }
+
+  // ── Playback ───────────────────────────────────────────────────────────────
+
+  async function playItem(idx) {
+    const item = results[idx];
+    if (!item) return;
+    focusIdx = idx;
+
+    setStatus('Loading: ' + item.title);
+    $('playerTitleTxt').textContent = item.title;
+    $('playerSpinMsg').style.display = 'flex';
+    $('playerFrame').src = 'about:blank';
+    $('playerOverlay').classList.add('open');
+    playerOpen = true;
+
+    let playUrl = item.url;
+
+    // Try Real-Debrid unrestriction for known hosters
+    if (rdAvailable) {
+      try {
+        const r = await fetch('/api/v1/unrestrict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: item.url })
+        });
+        if (r.ok) {
+          const d = await r.json();
+          if (d.url) { playUrl = d.url; }
+        }
+      } catch (_) {}
+    }
+
+    // Load the page in iframe
+    $('playerFrame').src = playUrl;
+    $('playerFrame').onload = () => { $('playerSpinMsg').style.display = 'none'; };
+    setTimeout(() => { $('playerSpinMsg').style.display = 'none'; }, 6000);
+
+    setStatus('Playing: ' + item.title);
+
+    // Also notify the backend player (non-blocking)
+    fetch('/api/v1/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: playUrl, title: item.title })
+    }).catch(() => {});
+  }
+
+  function closePlayer() {
+    $('playerFrame').src = 'about:blank';
+    $('playerOverlay').classList.remove('open');
+    playerOpen = false;
+    setStatus('');
+    const cards = cardRow.querySelectorAll('.card');
+    if (cards[focusIdx]) cards[focusIdx].focus();
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function showView(which) {
+    $('welcomeView').style.display  = which === 'welcome'  ? '' : 'none';
+    $('loadingView').style.display  = which === 'loading'  ? 'flex' : 'none';
+    $('resultsView').style.display  = which === 'results'  ? '' : 'none';
+  }
+
+  function resetToWelcome() {
+    showView('welcome');
+    searchInput.value = '';
+    searchInput.focus();
+    setStatus('');
+    results = [];
+  }
+
+  function setStatus(msg) { $('statusTxt').textContent = msg; }
+
+  function toast(msg, ms = 4000) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), ms);
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
+  }
+
+  function getDomain(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ''); }
+    catch { return url.slice(0, 28); }
+  }
+</script>
+</body>
+</html>

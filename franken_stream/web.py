@@ -116,13 +116,25 @@ async def v1_search(request: Request):
         if isinstance(plugin_results, Exception):
             plugin_results = []
 
-        # Merge, dedup by URL (scraper results take priority)
-        seen: set = {u for _, u in scraper_results}
-        raw = list(scraper_results)
-        for title, url in plugin_results:
+        # Merge all results, score by relevance, deduplicate by URL
+        from franken_stream.async_scraper import _relevance_score
+        seen: set = set()
+        scored = []
+        for title, url in scraper_results:
             if url not in seen:
                 seen.add(url)
-                raw.append((title, url))
+                scored.append((_relevance_score(title, query), title, url))
+        for item in plugin_results:
+            # plugin_results are MediaItem objects
+            title = getattr(item, "title", "") if not isinstance(item, tuple) else item[0]
+            url = getattr(item, "url", "") if not isinstance(item, tuple) else item[1]
+            if url and url not in seen:
+                seen.add(url)
+                scored.append((_relevance_score(title, query), title, url))
+
+        # Best matches first
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        raw = [(t, u) for _, t, u in scored]
 
         if raw:
             fts.store(query, raw)

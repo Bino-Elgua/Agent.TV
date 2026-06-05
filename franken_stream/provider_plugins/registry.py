@@ -29,8 +29,10 @@ class ProviderRegistry:
         from .archive import InternetArchiveProvider
         from .tubi import TubiProvider
         from .pluto import PlutoTVProvider
+        from .ytdlp import YtDlpProvider
+        from .plex import PlexFreeProvider
 
-        for cls in [InternetArchiveProvider, TubiProvider, PlutoTVProvider]:
+        for cls in [YtDlpProvider, TubiProvider, PlutoTVProvider, PlexFreeProvider, InternetArchiveProvider]:
             try:
                 p = cls()
                 self.register(p)

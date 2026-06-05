@@ -1,28 +1,47 @@
 {
   "movie_search_bases": [
+    "https://fmovies.ps/search/",
+    "https://bflix.gg/search/",
+    "https://cataz.net/search/",
+    "https://hdtoday.cc/search/",
+    "https://cinezone.to/filter?keyword=",
+    "https://goojara.to/?search=",
+    "https://afdah2.cyou/search/",
+    "https://yesmovies.ag/search?keyword=",
     "https://myflixerz.to/search/",
     "https://myflixerz.me/search/",
-    "https://myflixer.cx/search/",
-    "https://cineby.ru/search/",
     "https://lookmovie2.to/search?q=",
     "https://hurawatch.cc/search?keyword=",
-    "https://yesmovies.ag/search?keyword=",
     "https://2flix.com/search/",
-    "https://flixbaba.com/search?q="
+    "https://flixbaba.com/search?q=",
+    "https://123moviesfree.net/search/",
+    "https://wootly.ch/search?q=",
+    "https://flixtorrent.to/search?q=",
+    "https://iosmovies.org/search?q=",
+    "https://myflixer.cx/search/"
+  ],
+  "series_search_bases": [
+    "https://fmovies.ps/search/",
+    "https://bflix.gg/search/",
+    "https://cataz.net/search/",
+    "https://hdtoday.cc/search/",
+    "https://myflixerz.to/search/",
+    "https://lookmovie2.to/search?q=",
+    "https://goojara.to/?search=",
+    "https://123moviesfree.net/search/"
   ],
   "embed_fallbacks": [
     "vidplay.online",
     "streamtape.com",
     "upstream.to",
+    "filemoon.sx",
+    "doodstream.com",
+    "mixdrop.co",
     "vidcloud9.com",
     "mycloud"
   ],
   "legal_fallbacks": [
     "https://www.youtube.com/results?search_query="
   ],
-  "series_search_bases": [
-    "https://myflixerz.to/search/",
-    "https://lookmovie2.to/search?q="
-  ],
-  "notes": "Feb 13 2026 – myflixerz variants (to, me, cx) active per reports. lookmovie2.to, hurawatch.cc, yesmovies.ag, 2flix.com often work. flixbaba.com for rare titles. Test with proxy if geo-blocked. yt-dlp catches YouTube uploads."
+  "notes": "June 2026 — fmovies.ps, bflix.gg, cataz.net, hdtoday.cc most reliable. Plugin system handles YouTube (yt-dlp), Tubi, Pluto TV, Plex Free, and Archive.org with proper APIs."
 }

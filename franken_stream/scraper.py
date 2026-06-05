@@ -150,7 +150,7 @@ class ContentScraper:
             elapsed_ms = (_time.time() - start) * 1000
 
             soup = BeautifulSoup(response.content, "html.parser")
-            items = self._extract_results(soup, verbose=verbose, llm_client=self.llm_client, provider_url=base_url)
+            items = self._extract_results(soup, verbose=verbose, llm_client=self.llm_client, provider_url=base_url, query=query)
 
             if verbose:
                 console.log(
@@ -251,104 +251,117 @@ class ContentScraper:
         return results
 
     @staticmethod
+    def _relevance_score(title: str, query: str) -> int:
+        """Score how well a title matches a query. 0 = no match."""
+        t = title.lower().strip()
+        q = query.lower().strip()
+        if not q:
+            return 50
+        if t == q:
+            return 100
+        if t.startswith(q):
+            return 80
+        if q in t:
+            return 60
+        query_words = [w for w in re.split(r'\W+', q) if len(w) > 2]
+        if not query_words:
+            return 0
+        matched = sum(1 for w in query_words if w in t)
+        if matched == len(query_words):
+            return 50
+        if matched >= max(1, int(len(query_words) * 0.6)):
+            return 30
+        if matched >= 1:
+            return 10
+        return 0
+
+    @staticmethod
+    def _is_nav_link(text: str, href: str) -> bool:
+        nav_words = {
+            "home", "search", "menu", "nav", "login", "sign in", "sign up",
+            "register", "contact", "about", "faq", "terms", "privacy",
+            "cookie", "dmca", "request", "genre", "trending", "new release",
+            "most viewed", "coming soon", "all movies", "all series",
+            "filter", "sort", "next", "previous", "load more", "see all",
+        }
+        t = text.lower().strip()
+        return (
+            t in nav_words
+            or len(t) < 2
+            or len(t) > 120
+            or href in ("/", "#", "")
+        )
+
+    @staticmethod
     def _extract_results(
-        soup: BeautifulSoup, verbose: bool = False, llm_client=None, provider_url=None
+        soup: BeautifulSoup,
+        verbose: bool = False,
+        llm_client=None,
+        provider_url: str = "",
+        query: str = "",
     ) -> List[Tuple[str, str]]:
         """
-        Extract movie/show titles and links from parsed HTML with fallbacks.
-
-        Args:
-            soup: BeautifulSoup object
-            verbose: Print debug info
-            llm_client: Optional LLM client for selector healing
-            provider_url: Provider URL for LLM context
-
-        Returns:
-            List of (title, url) tuples
+        Extract movie/show titles and links, ranked by relevance to query.
+        Collects from all matching selectors instead of stopping at first hit.
         """
-        results = []
-        try:
-            # Primary: Try common streaming site selectors
-            selectors = [
-                ("a.film-name", "film-name"),  # myflixerz, cineby
-                ("a.title", "title"),
-                ("a[href*='/watch/']", "watch link"),
-                ("a[href*='/movie/']", "movie link"),
-                ("a[href*='/embed/']", "embed link"),
-                ("h3 a", "heading link"),
-                ("div.card a", "card link"),
-                ("div.film-poster a", "poster link"),
-                (".mli-info a", "mli-info link"),
-            ]
+        candidates: dict = {}  # url -> (title, url)
 
-            for selector, selector_type in selectors:
-                matches = soup.select(selector)
-                if matches:
-                    if verbose:
-                        console.log(f"[cyan]  Found {len(matches)} with selector: {selector}")
-                    for link in matches:
-                        text = link.get_text(strip=True)
-                        href = link.get("href", "")
+        selectors = [
+            "a.film-name", "a.title", "a.name", "a.ml-mask",
+            ".movie-card a", ".film-poster a", "div.card a",
+            ".item a", ".mli-info a", "h2 a", "h3 a",
+            "a[href*='/watch/']", "a[href*='/movie/']",
+            "a[href*='/tv/']", "a[href*='/show/']", "a[href*='/series/']",
+        ]
 
-                        # Filter bad results
-                        if (
-                            text
-                            and len(text) > 2
-                            and len(text) < 100  # Avoid nav menu text
-                            and href
-                            and not href.startswith("#")
-                            and not any(
-                                bad in text.lower()
-                                for bad in ["home", "search", "menu", "nav", "login", "sign"]
-                            )
-                        ):
-                            results.append((text, href))
-                    if results:
-                        break  # Use first selector that worked
+        base_host = ""
+        if provider_url:
+            p = urlparse(provider_url)
+            base_host = f"{p.scheme}://{p.netloc}"
 
-            # LLM Selector Healing: If no results and LLM available, ask for help
-            if not results and llm_client and llm_client.enabled and provider_url:
-                healed_selector = ContentScraper._heal_selector_with_llm(
-                    llm_client, provider_url, str(soup)[:2000], verbose
-                )
-                if healed_selector:
-                    matches = soup.select(healed_selector)
-                    if matches:
-                        if verbose:
-                            console.log(f"[green]  LLM healed selector: {healed_selector}")
-                        for link in matches:
-                            text = link.get_text(strip=True)
-                            href = link.get("href", "")
-                            if text and href and len(text) > 2 and len(text) < 100:
-                                results.append((text, href))
+        for selector in selectors:
+            for link in soup.select(selector):
+                text = link.get_text(strip=True) or link.get("title", "").strip()
+                href = link.get("href", "").strip()
+                if not text or not href:
+                    continue
+                if href.startswith("/") and base_host:
+                    href = base_host + href
+                elif not href.startswith("http"):
+                    continue
+                if ContentScraper._is_nav_link(text, href):
+                    continue
+                if href not in candidates:
+                    candidates[href] = (text, href)
 
-            # Fallback: Try regex patterns if no results
-            if not results:
-                html_str = str(soup)
-                for pattern, pattern_type in EMBED_PATTERNS:
-                    matches = re.findall(pattern, html_str)
-                    for match in matches:
-                        if match and match.startswith(("http", "/", ".")):
-                            title = match.split("/")[-1][:50]
-                            results.append((f"{title} ({pattern_type})", match))
-                if results and verbose:
-                    console.log(f"[cyan]  Fallback: Regex matched {len(results)} patterns")
+        if verbose:
+            console.log(f"[cyan]  Collected {len(candidates)} raw candidates")
 
-            # Deduplicate by URL while preserving order
-            seen = set()
-            unique_results = []
-            for title, url in results:
-                if url not in seen and title not in seen:
-                    seen.add(url)
-                    seen.add(title)
-                    unique_results.append((title, url))
+        # LLM Selector Healing: If no results and LLM available
+        if not candidates and llm_client and llm_client.enabled and provider_url:
+            healed_selector = ContentScraper._heal_selector_with_llm(
+                llm_client, provider_url, str(soup)[:2000], verbose
+            )
+            if healed_selector:
+                for link in soup.select(healed_selector):
+                    text = link.get_text(strip=True)
+                    href = link.get("href", "")
+                    if text and href and not ContentScraper._is_nav_link(text, href):
+                        candidates[href] = (text, href)
 
-            return unique_results[:20]  # Limit to top 20 results
+        # Score and rank by query relevance
+        scored = []
+        for title, url in candidates.values():
+            score = ContentScraper._relevance_score(title, query)
+            if score > 0 or not query:
+                scored.append((score, title, url))
 
-        except Exception as e:
-            if verbose:
-                console.log(f"[red]Error extracting results:[/red] {e}")
-            return []
+        scored.sort(key=lambda x: (-x[0], x[1]))
+
+        if verbose and scored:
+            console.log(f"[green]  Top result: {scored[0][1]!r} (score={scored[0][0]})")
+
+        return [(title, url) for _, title, url in scored[:20]]
 
     @staticmethod
     def _heal_selector_with_llm(llm_client, provider_url: str, html_fragment: str, verbose: bool = False) -> Optional[str]:
